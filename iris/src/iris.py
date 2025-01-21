@@ -661,7 +661,7 @@ class IRIS:
                 final_scores[signal] = {}
                 final_scores[signal][metric] = scores[signal]
 
-        return scores
+        return final_scores
 
     def find_optimal_cutoff(
             self, 
