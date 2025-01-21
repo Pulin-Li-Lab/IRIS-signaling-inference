@@ -26,6 +26,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn import svm, decomposition
 
 from iris.utils.generate_bitstrings import generate_bitflip, generate_random
+from iris.utils.plotting import average_metrics
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -257,7 +258,7 @@ class IRIS:
         sc.pp.neighbors(adata_diff, n_neighbors=100, n_pcs=50, use_rep='X_pca', method='gauss')
         sc.tl.diffmap(adata_diff, n_comps=10)
         # plot diffusion map
-        sc.pl.diffmap(adata_diff, components=['2, 4'], projection='2d', color='celltype')
+        sc.pl.diffmap(adata_diff, components=['2, 3'], projection='2d', color='celltype')
 
         self.diffmaps[name] = {'data': adata_diff} 
 
@@ -422,13 +423,16 @@ class IRIS:
             test_batches: list[int], 
             out_path: str, 
             n_layers: int = 2, 
-            n_latent: int = 30
-        ) -> None: # TODO: consider allowing control of vae epochs and scanvi epochs too
+            n_latent: int = 30,
+            vae_epochs: int = 100,
+            scanvi_epochs: int = 10
+        ) -> None:
         '''
         Creates and runs VAE model contained in IRIS object with given hyperparameters. Model 
-        runs with random 80/20 train/test split across all batches and conditions. Stores final 
-        trained models for each signal into models attribute of the IRIS object (IRIS.models). 
-        Saves model predictions into csv at outpath.
+        runs with random 80/20 train/test split across all batches and conditions, and obscures 
+        cell type identity in training data.  Stores final trained models for each signal into 
+        models attribute of the IRIS object (IRIS.models). Saves model predictions dataframe 
+        into csv file at outpath.
         
         Args:
             train_batches: list of integers of batches to obscure while training 
@@ -436,6 +440,8 @@ class IRIS:
             out_path: string of filename to write results to
             n_layers: number of hidden layers, default 2
             n_latent: dimensionality of latent space, default 30
+            vae_epochs: integer number of epochs to train VAE, default 100
+            scanvi_epochs: integer number of epochs to train SCANVI used to predict, default 10
         '''
         self.anndata.obs['Clusters'] = "unknown"
 
@@ -451,7 +457,7 @@ class IRIS:
         adata_full_gifford.obs['celltype'] = adata_full_gifford.obs['celltype'].cat.add_categories('unknown')
         adata_full_gifford.obs.loc[adata_full_gifford.obs[np.isin(adata_full_gifford.obs['batch'], train_batches)].index, 'celltype'] = 'unknown'
 
-        vae = self.set_scvi_model(adata_full_gifford, n_layers=n_layers, n_latent=n_latent, epochs=100)
+        vae = self.set_scvi_model(adata_full_gifford, n_layers=n_layers, n_latent=n_latent, epochs=vae_epochs)
 
         df = pd.DataFrame({}, index=adata_full_gifford[held_out].obs.index)
 
@@ -462,7 +468,7 @@ class IRIS:
 
         for val in class_names:
             scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=val, unlabeled_category = "unknown")
-            scanvae.train(max_epochs=10)
+            scanvae.train(max_epochs=scanvi_epochs)
             df[val] = scanvae.predict(adata_full_gifford[held_out], soft=True)['Stim'].values
             self.models[val] = scanvae
         
@@ -495,6 +501,49 @@ class IRIS:
             except:
                 print(f"anndata object missing column {c}")
                 return False
+            
+    def plot_iris_metric(
+            self,
+            resp_pred_1: list,
+            resp_pred_2: list,
+            iris_pred_1: list,
+            iris_pred_2: list,
+            metric: str
+        ) -> None:
+        '''
+        Plots IRIS predictions vs. response gene method predictions for a given metric. 
+        Expects metric scores of predictions as inputs. Creates plot and labels/titles,
+        but needs plt.show() to be called after to display both. 
+
+        Args:
+            resp_pred_1: list of scores of response gene method to be plotted on x-axis 
+                (ex. recall, false positive rate)
+            resp_pred_2: list of scores of response gene method to be plotted on y-axis 
+                (ex. precision, true positive rate)
+            iris_pred_1: list of scores of IRIS predictions to be plotted on x-axis
+            iris_pred_2: list of scores of IRIS predictions to be plotted on y-axis
+        '''
+        colors = ['#D62728', '#17BECF', '#2CA02C', 'black', '#8C564B']
+        plt.figure()
+        for i in range(len(iris_pred_1)):
+            plt.plot(resp_pred_1[i], resp_pred_2[i], color=colors[i], linestyle='dashed', dashes=(5, 5))
+            plt.plot(iris_pred_1[i], iris_pred_2[i], color=colors[i])
+            plt.xlim([1e-6, 1])
+            plt.ylim([0, 1])
+        plt.legend(self.signals + ['IRIS', 'Reponse Genes'])
+
+        if metric == "AUROC":
+            x_label = 'False Positive Rate'
+            y_label = 'True Positive Rate'
+            title = 'AUROC Signaling Regressed Prediction'
+        elif metric == "AUPRC":
+            x_label = 'Recall'
+            y_label = 'Precision'
+            title = 'Precision-Recall Signaling Prediction'
+            
+        plt.ylabel(y_label)
+        plt.xlabel(x_label)
+        plt.title(title)
                 
     def evaluate(
             self, 
@@ -537,87 +586,60 @@ class IRIS:
         data = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
         data.layers['counts'] = data.X
         df = pd.DataFrame({}, index=data.obs.index)
-                        
-        # all lists of lists
-        if "AUROC" in metrics:
-            auroc_tprs = []
-            auroc_fprs = []
-            resp_genes_tprs = []
-            resp_genes_fprs = []
-        if "AUPRC" in metrics:
-            auprc_precisions = []
-            auprc_recalls = []
-            resp_genes_precisions = []
-            resp_genes_recalls = []
 
-        for signal in signals:
-            class_name = signal + '_class'
-            name = signal + '_resp_zorn'
-            scores[signal] = {}
+        for metric in metrics:
+            if plot and metric != "F1":
+                iris_pred_1 = []
+                iris_pred_2 = []
+                resp_pred_1 = []
+                resp_pred_2 = []
 
-            vae = self.set_scvi_model(data, epochs=400)
-            scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=class_name, unlabeled_category = "unknown")
-            scanvae.train(max_epochs=5, batch_size=512)
-            self.models[class_name] = scanvae
+            for signal in signals:
+                class_name = signal + '_class'
+                name = signal + '_resp_zorn'
+                scores[signal] = {}
 
-            df[class_name] = scanvae.predict()
-            threshold = self.find_optimal_cutoff((data.obs[class_name] == "Stim").values.astype(int), data.obs[name])
+                vae = self.set_scvi_model(data, epochs=400)
+                scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=class_name, unlabeled_category = "unknown")
+                scanvae.train(max_epochs=5, batch_size=512)
+                self.models[class_name] = scanvae
 
-            for metric in metrics:
+                df[class_name] = scanvae.predict()
+                threshold = self.find_optimal_cutoff((data.obs[class_name] == "Stim").values.astype(int), data.obs[name])
+
                 if metric == "AUROC":
                     score = skm.roc_auc_score(data.obs[class_name], df[class_name], pos_label='Stim')
-                    tpr, fpr, _ = skm.roc_curve(data.obs[class_name], df[class_name], pos_label='Stim')
-                    auroc_tprs.append(tpr)
-                    auroc_fprs.append(fpr)
+                    if plot:
+                        fpr, tpr, _ = skm.roc_curve(data.obs[class_name], df[class_name], pos_label='Stim')
+                        iris_pred_1.append(fpr)
+                        iris_pred_2.append(tpr)
 
-                    tpr, fpr, _ = skm.roc_curve((data.obs[class_name] == "Stim").astype(int), (data.obs[name].values > threshold).astype(int))
-                    resp_genes_tprs.append(tpr)
-                    resp_genes_fprs.append(fpr)
+                        fpr, tpr, _ = skm.roc_curve((data.obs[class_name] == "Stim").astype(int), (data.obs[name].values > threshold).astype(int))
+                        resp_pred_1.append(fpr)
+                        resp_pred_2.append(tpr)
                 elif metric == "F1":
                     score = skm.f1_score(data.obs[class_name], df[class_name], pos_label='Stim')
                 elif metric == "AUPRC":
                     precision, recall, _ = skm.precision_recall_curve(data.obs[class_name], df[class_name], pos_label='Stim')
                     score = skm.auc(recall, precision)
-                    auprc_precisions.append(precision)
-                    auprc_recalls.append(recall)
+                    if plot:
+                        iris_pred_1.append(recall)
+                        iris_pred_2.append(precision)
 
-                    precisions, recalls, _ = skm.precision_recall_curve((data.obs[class_name] == "Stim").astype(int), (data.obs[name].values > threshold).astype(int))
-                    resp_genes_precisions.append(precisions)
-                    resp_genes_recalls.append(recalls)
+                        precisions, recalls, _ = skm.precision_recall_curve((data.obs[class_name] == "Stim").astype(int), (data.obs[name].values > threshold).astype(int))
+                        resp_pred_1.append(recalls)
+                        resp_pred_2.append(precisions)
+                    
                 else:
                     print(f"Metric {metric} is not supported")
                     break
 
                 scores[signal][metric] = score
 
-        # TODO: think this plotting code could be less repetitive
-        if plot:
-            colors = ['#D62728', '#17BECF', '#2CA02C', 'black', '#8C564B']
-            if auroc_tprs:
-                f = plt.figure(1)
-                for i in range(len(auroc_tprs)):
-                    plt.plot(resp_genes_tprs[i], resp_genes_fprs[i], color=colors[i])
-                    plt.plot(auroc_tprs[i], auroc_fprs[i], color=colors[i], linestyle='dashed', dashes=(5, 5))
-                    plt.xlim([1e-6, 1])
-                    plt.ylim([0, 1])
-                plt.legend(self.signals + ['IRIS', 'Reponse Genes'])
-                plt.ylabel('True Positive Rate')
-                plt.xlabel('False Positive Rate')
-                plt.title('AUROC Signaling Regressed Prediction')
+            if plot and metric != "F1":
+                self.plot_iris_metric(resp_pred_1, resp_pred_2, iris_pred_1, iris_pred_2, metric)
 
-            if auprc_precisions:
-                g = plt.figure(2)
-                for i in range(len(auprc_precisions)):
-                    plt.plot(resp_genes_recalls[i], resp_genes_precisions[i], color=colors[i])
-                    plt.plot(auprc_recalls[i], auprc_precisions[i], color=colors[i], linestyle='dashed', dashes=(5, 5))
-                    plt.xlim([1e-6, 1])
-                    plt.ylim([0, 1])
-                plt.legend(self.signals + ['IRIS', 'Reponse Genes'])
-                plt.ylabel('Precision')
-                plt.xlabel('Recall')
-                plt.title('Precision-Recall Signaling Prediction')
-            
-            plt.show()
+        plt.show()
 
         return scores
 
@@ -940,7 +962,7 @@ class IRIS:
             signal: str, 
             metrics: list[str], 
             resample_labels: bool = False
-        ) -> tuple[dict[str, [list[int]]], dict[str, NDArray[np.float64]]]:
+        ) -> tuple[dict[str, list[int]], dict[str, NDArray[np.float64]]]:
         '''
         Samples the best combination of hyperparameters based on given parameter values. 
         Evaluates model on training data based on given metric, returns best hyperparameter 
@@ -1184,11 +1206,11 @@ class IRIS:
                 threshold = self.find_optimal_cutoff((adata_full_gifford.obs[classification] == "Stim").values.astype(int), adata_full_gifford.obs[name])
 
                 if metric == "AUROC":
-                    tpr, fpr, _ = skm.roc_curve(truth[:, i], out_results[classification], pos_label='Stim')
+                    fpr, tpr, _ = skm.roc_curve(truth[:, i], out_results[classification], pos_label='Stim')
                     auroc_tps.append(tpr)
                     auroc_fps.append(fpr)
 
-                    tpr, fpr, _ = skm.roc_curve((truth[:, i] == "Stim").astype(int),  (adata_out.obs[name].values > threshold).astype(int))
+                    fpr, tpr, _ = skm.roc_curve((truth[:, i] == "Stim").astype(int),  (adata_out.obs[name].values > threshold).astype(int))
                     resp_tps.append(tpr)
                     resp_fps.append(fpr)
                 elif metric == "AUPRC":
@@ -1201,92 +1223,19 @@ class IRIS:
                     resp_recalls.append(recalls)
                 else:
                     print("this metric is not supported")
-                    break
+                    return
                     
                 i += 1
 
         n = len(self.signals)
         m = len(validation_batches)
 
-        # TODO: make this plotting logic smarter / less repetitive
-
         if metric == "AUROC":
-            avgd_tps = []
-            avgd_fps = []
-            avgd_resp_tps = []
-            avgd_resp_fps = []
-            for i in range(n):
-                total_tp = 0
-                total_fp = 0
-                for j in range(m):
-                    total_tp += auroc_tps[j * n + i]
-                    total_fp += auroc_fps[j * n + i]
-                total_tp /= m
-                total_fp /= m 
-                avgd_tps.append(total_tp)
-                avgd_fps.append(total_fp)
-
-                total_tp = 0
-                total_fp = 0
-                for j in range(m):
-                    total_tp += resp_tps[j * n + i]
-                    total_fp += resp_fps[j * n + i]
-                total_tp /= m
-                total_fp /= m 
-                avgd_resp_tps.append(total_tp)
-                avgd_resp_fps.append(total_fp)
-
+            iris_x, iris_y, resp_x, resp_y = average_metrics(auroc_fps, auroc_tps, resp_fps, resp_tps, n, m)
         if metric == "AUPRC":
-            avgd_precisions = []
-            avgd_recalls = []
-            avgd_resp_precisions = []
-            avgd_resp_recalls = []
-            for i in range(n):
-                total_precisions = 0
-                total_recalls = 0
-                for j in range(m):
-                    total_precisions += auprc_precisions[j * n + i]
-                    total_recalls += auprc_recalls[j * n + i]
-                total_precisions /= m
-                total_recalls /= m 
-                avgd_precisions.append(total_precisions)
-                avgd_recalls.append(total_recalls)
+            iris_x, iris_y, resp_x, resp_y = average_metrics(auprc_recalls, auprc_precisions, resp_recalls, resp_precisions, n, m)
 
-                total_precisions = 0
-                total_recalls = 0
-                for j in range(m):
-                    total_precisions += resp_precisions[j * n + i]
-                    total_recalls += resp_recalls[j * n + i]
-                total_precisions /= m
-                total_recalls /= m 
-                avgd_resp_precisions.append(total_precisions)
-                avgd_resp_recalls.append(total_recalls)
-        
-        colors = ['#D62728', '#17BECF', '#2CA02C', 'black', '#8C564B']
-        if avgd_tps:
-            f = plt.figure(1)
-            for i in range(len(avgd_tps)):
-                plt.plot(avgd_tps[i], avgd_fps[i], color=colors[i], dashes=(5, 5))
-                plt.plot(avgd_resp_tps[i], avgd_resp_fps[i], color=colors[i], linestyle='dashed', dashes=(5, 5))
-                plt.xlim([1e-6, 1])
-                plt.ylim([0, 1])
-            plt.legend(self.signals + ['IRIS', 'Reponse Genes'])
-            plt.ylabel('True Positive Rate')
-            plt.xlabel('False Positive Rate')
-            plt.title('AUROC Signaling Regressed Prediction')
-
-        if avgd_precisions:
-            g = plt.figure(2)
-            for i in range(len(avgd_precisions)):
-                plt.plot(avgd_recalls[i], avgd_precisions[i], color=colors[i], dashes=(5, 5))
-                plt.plot(avgd_resp_recalls[i], avgd_resp_precisions[i], color=colors[i], linestyle='dashed', dashes=(5, 5))
-                plt.xlim([1e-6, 1])
-                plt.ylim([0, 1])
-            plt.legend(self.signals + ['IRIS', 'Reponse Genes'])
-            plt.ylabel('Precision')
-            plt.xlabel('Recall')
-            plt.title('Precision-Recall Signaling Prediction')
-            
+        self.plot_iris_metric(resp_x, resp_y, iris_x, iris_y, metric)
         plt.show()
     
     def calc_enrichment(
