@@ -11,22 +11,16 @@ import scanpy as sc
 import pandas as pd
 import sklearn.metrics as skm
 import seaborn as sns
-import csv
-import random
-import gseapy as gp
-import scipy
 
 from sklearn.feature_selection import mutual_info_classif
-from sklearn.preprocessing import OneHotEncoder
-from scipy.sparse import hstack
-from sklearn.pipeline import make_pipeline, Pipeline
-from sklearn.preprocessing import Normalizer
-from sklearn.linear_model import SGDClassifier
-from sklearn.ensemble import RandomForestClassifier
-from sklearn import svm, decomposition
+from csv import reader as csv_reader
+from scipy.sparse import csr_matrix
+from random import choices
 
 from iris.utils.generate_bitstrings import generate_bitflip, generate_random
-from iris.utils.plotting import average_metrics
+from iris.utils.plotting import average_metrics, find_optimal_cutoff, plot_iris_metric, score_predictions, plot_f1
+from iris.utils.benchmarking import run_benchmarking
+from iris.utils.analysis import get_components, calc_enrichment
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -138,7 +132,7 @@ class IRIS:
         self.gene_weights[signal] = {}
 
         with open(path, mode='r') as csvfile:
-            reader = csv.reader(csvfile)
+            reader = csv_reader(csvfile)
             for line in reader:
                 if i == 0:
                     i += 1
@@ -261,50 +255,6 @@ class IRIS:
         sc.pl.diffmap(adata_diff, components=['2, 3'], projection='2d', color='celltype')
 
         self.diffmaps[name] = {'data': adata_diff} 
-
-    def get_components(
-            self, 
-            trajectory: list[str], 
-            subsets: list[NDArray], 
-            n_comps: int
-        ) -> list[int]:
-        '''
-        Finds the diffusion components that properly order the given trajectory given AnnData. 
-
-        Args:
-            trajectory: list of strings of cell types, in order
-            subsets: list of ['X_diffmap'] data corresponding to the cell types in order
-            n_comps: number of relevant diffusion components
-
-        Returns:
-            components: list of integers of diffusion components that properly order trajectory
-        '''
-        components = []
-        n = len(trajectory)
-
-        for i in range(1, n_comps): # relevant diffusion components start at index 1
-            front = True
-            back = True
-            forward = []
-            reverse = []
-            for cell_type in trajectory:
-                diff_component = subsets[cell_type][:,i]
-                avg_resp = np.mean(diff_component)
-                # collect values along diffusion component
-                forward.append(avg_resp)
-                # collect values along reverse of diffusion component
-                reverse.append(-1*avg_resp)
-            for j in range(1, n):
-                # diffusion component incorrectly orders
-                if forward[j] < forward[j-1]:
-                    front = False
-                if reverse[j] < reverse[j-1]:
-                    back = False
-            # diffusion component orders correctly in either forward or reverse
-            if front or back: 
-                components.append(i+1)
-
-        return components
         
     def select_diffusion_components(
             self, 
@@ -326,17 +276,7 @@ class IRIS:
                 Returns [] if no components identified
         ''' 
         long_name = ''.join(trajectory)
-        # TODO: consider making one diffmap once for IRIS object that has all celltypes, and getting 
-        # components from that diffmap rather than making multiple diffusion maps depending on the 
-        # trajectories being asked for
         
-        # THINK: maybe long-term only having one diffusion map computer once for entire anndata object 
-        # is way to go, so should never have to recompute after self.diffmaps is non-empty / not None
-            # compute diffusion map once with all cell types that are even in the data
-            # probably separate out and have self.diffmap as its own attribute corresponding to anndata object
-                # after running diffmap, and all of this checking logic below would just be checking
-                # if self.diffmap already exists or not
-
         # check if best components already found or adata obj w diffmap already exists
         exists = False
         for diffmap in self.diffmaps:
@@ -366,7 +306,7 @@ class IRIS:
             subsets[cell_type] = data[data.obs['celltype'] == cell_type].obsm['X_diffmap']
 
         n_comps = data.obsm['X_diffmap'].shape[1]
-        diff_components = self.get_components(trajectory, subsets, n_comps)
+        diff_components = get_components(trajectory, subsets, n_comps)
             
         widest = 0
         best_dc = -1
@@ -426,13 +366,13 @@ class IRIS:
             n_latent: int = 30,
             vae_epochs: int = 100,
             scanvi_epochs: int = 10
-        ) -> None:
+        ) -> pd.DataFrame:
         '''
         Creates and runs VAE model contained in IRIS object with given hyperparameters. Model 
         runs with random 80/20 train/test split across all batches and conditions, and obscures 
         cell type identity in training data.  Stores final trained models for each signal into 
         models attribute of the IRIS object (IRIS.models). Saves model predictions dataframe 
-        into csv file at outpath.
+        into csv file at outpath. Returns pandas dataframe of predictions.
         
         Args:
             train_batches: list of integers of batches to obscure while training 
@@ -442,6 +382,9 @@ class IRIS:
             n_latent: dimensionality of latent space, default 30
             vae_epochs: integer number of epochs to train VAE, default 100
             scanvi_epochs: integer number of epochs to train SCANVI used to predict, default 10
+
+        Returns:
+            df: pandas DataFrame of prediction of presence of each signal (0 to 1)
         '''
         self.anndata.obs['Clusters'] = "unknown"
 
@@ -473,6 +416,8 @@ class IRIS:
             self.models[val] = scanvae
         
         df.to_csv(out_path)
+
+        return df
     
     def validate_adata(
             self, 
@@ -501,123 +446,6 @@ class IRIS:
             except:
                 print(f"anndata object missing column {c}")
                 return False
-            
-    def plot_iris_metric(
-            self,
-            resp_pred_1: list,
-            resp_pred_2: list,
-            iris_pred_1: list,
-            iris_pred_2: list,
-            metric: str,
-            signals: list[str] = None
-        ) -> None:
-        '''
-        Plots IRIS predictions vs. response gene method predictions for a given metric. 
-        Expects metric scores of predictions as inputs. Creates plot and labels/titles,
-        but needs plt.show() to be called after to display both. Only AUROC/AUPRC
-
-        Args:
-            resp_pred_1: list of scores of response gene method to be plotted on x-axis 
-                (ex. recall, false positive rate)
-            resp_pred_2: list of scores of response gene method to be plotted on y-axis 
-                (ex. precision, true positive rate)
-            iris_pred_1: list of scores of IRIS predictions to be plotted on x-axis
-            iris_pred_2: list of scores of IRIS predictions to be plotted on y-axis
-        '''
-        colors = ['#D62728', '#17BECF', '#2CA02C', 'black', '#8C564B']
-        if not signals:
-            signals = self.signals
-
-        plt.figure()
-        for i in range(len(iris_pred_1)):
-            plt.plot(resp_pred_1[i], resp_pred_2[i], color=colors[i], linestyle='dashed', dashes=(5, 5))
-            plt.plot(iris_pred_1[i], iris_pred_2[i], color=colors[i])
-            plt.xlim([1e-6, 1])
-            plt.ylim([0, 1])
-        plt.legend(signals + ['IRIS', 'Reponse Genes'])
-
-        if metric == "AUROC":
-            x_label = 'False Positive Rate'
-            y_label = 'True Positive Rate'
-            title = 'AUROC Signaling Regressed Prediction'
-        elif metric == "AUPRC":
-            x_label = 'Recall'
-            y_label = 'Precision'
-            title = 'Precision-Recall Signaling Prediction'
-            
-        plt.ylabel(y_label)
-        plt.xlabel(x_label)
-        plt.title(title)
-
-    def score_predictions(
-            self,
-            iris_preds: pd.DataFrame,
-            adata: AnnData,
-            metric: str,
-            signals: list[str] = None,
-            plot: bool = False
-        ):
-        '''
-        Calculates score of IRIS predictions on given metric. 
-
-        Args:
-            iris_preds: pandas DataFrame of IRIS predictions, like from run_model. expects 
-            adata: AnnData object to use as ground truth of predictions
-            metric: string of desired statistics; if not given, all metrics are computed
-            signals: list of strings of signals to calculate score on (ex. ["Wnt"]); 
-                if not given, all signals are used
-            plot: whether or not to display AUROC, AUPRC curves (default True)
-
-        Returns:
-            scores: dictionary of dictionaries where keys are signals (RA, WNT, etc.) and 
-                values are calculated score for that particular metric
-            [IF PLOT = TRUE] --
-            iris_x: list of x-component of iris predictions (ex. recall)
-            iris_y: list of y-component of iris predictions (ex. precision)
-            resp_x: list of x-component of response gene method predictions
-            resp_y: list of y-component of response gene method predictions
-        '''
-        if not signals:
-            signals = self.signals
-        
-        scores = {}
-        if plot and metric != "F1":
-            iris_x, iris_y, resp_x, resp_y = [], [], [], []
-
-        for signal in signals:
-            class_name = signal + '_class'
-            resp_name = signal + '_resp_zorn'
-            threshold = self.find_optimal_cutoff((adata.obs[class_name] == 'Stim').astype(int), adata.obs[resp_name])
-
-            if metric == "AUROC":
-                score = skm.roc_auc_score((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
-                if plot:
-                    fpr, tpr, _ = skm.roc_curve((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
-                    iris_x.append(fpr)
-                    iris_y.append(tpr)
-
-                    fpr, tpr, _ = skm.roc_curve((adata.obs[class_name] == "Stim").astype(int), (adata.obs[resp_name].values > threshold).astype(int))
-                    resp_x.append(fpr)
-                    resp_y.append(tpr)
-            elif metric == "F1":
-                score = skm.f1_score((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
-            elif metric == "AUPRC":
-                precision, recall, _ = skm.precision_recall_curve((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
-                score = skm.auc(recall, precision)
-                if plot:
-                    iris_x.append(recall)
-                    iris_y.append(precision)
-
-                    precisions, recalls, _ = skm.precision_recall_curve((adata.obs[class_name] == "Stim").astype(int), (adata.obs[resp_name].values > threshold).astype(int))
-                    resp_x.append(recalls)
-                    resp_y.append(precisions)
-
-            scores[signal] = score
-
-        if plot:
-            return scores, iris_x, iris_y, resp_x, resp_y
-        else:
-            return scores
                 
     def evaluate(
             self, 
@@ -655,37 +483,13 @@ class IRIS:
         final_scores = {}
 
         for metric in metrics:
-            scores, iris_x, iris_y, resp_x, resp_y = self.score_predictions(iris_preds, adata, metric, signals, plot)
-            self.plot_iris_metric(resp_x, resp_y, iris_x, iris_y, metric, signals)
+            scores, iris_x, iris_y, resp_x, resp_y = score_predictions(iris_preds, adata, metric, signals, plot)
+            plot_iris_metric(resp_x, resp_y, iris_x, iris_y, metric, signals)
             for signal in signals:
                 final_scores[signal] = {}
                 final_scores[signal][metric] = scores[signal]
 
-        return final_scores
-
-    def find_optimal_cutoff(
-            self, 
-            target, 
-            predicted
-        ) -> list:
-        '''
-        Helper function to find optimal threshold of response gene value to be considered 
-        positive indicator of condition. Used in IRIS.held_out_condition_validation to 
-        score response gene value method. 
-
-        Args:
-            target: array-like true values 
-            predicted: array-like predicted values
-
-        Returns:
-            list of threshold values
-        '''
-        fpr, tpr, threshold = skm.roc_curve(target, predicted)
-        i = np.arange(len(tpr)) 
-        roc = pd.DataFrame({'tf' : pd.Series(tpr-(1-fpr), index=i), 'threshold' : pd.Series(threshold, index=i)})
-        roc_t = roc.iloc[(roc.tf-0).abs().argsort()[:1]]
-
-        return list(roc_t['threshold']) 
+        return final_scores 
     
     def held_out_condition_validation(
             self, 
@@ -751,6 +555,7 @@ class IRIS:
         for grouping in groupings:
             count = 0
             for combo in combos:
+                resp, nn = [], []
                 count += 1
                 # process data based on category, groupings, combos
                 if category:
@@ -783,35 +588,22 @@ class IRIS:
                     df[classification] = scanvae.predict()
                     out_results = df[np.isin(adata_full_giff2.obs.index, out_index)]
                 
-                    threshold = self.find_optimal_cutoff((adata_cat_in.obs[classification] == "Stim").values.astype(int), adata_cat_in.obs[classification.split('_')[0] + '_resp_zorn'])
+                    threshold = find_optimal_cutoff((adata_cat_in.obs[classification] == "Stim").values.astype(int), adata_cat_in.obs[classification.split('_')[0] + '_resp_zorn'])
                     
                     if (results[0, i]) == "Stim":
-                        lst_nn_score.append(skm.f1_score(results[:, i], out_results[classification], pos_label='Stim'))
-                        lst_resp.append(skm.f1_score((results[:, i] == "Stim").astype(int), (adata_cat_out.obs[classification.split('_')[0] + '_resp_zorn'].values > threshold).astype(int)))
+                        nn.append(skm.f1_score(results[:, i], out_results[classification], pos_label='Stim'))
+                        resp.append(skm.f1_score((results[:, i] == "Stim").astype(int), (adata_cat_out.obs[classification.split('_')[0] + '_resp_zorn'].values > threshold).astype(int)))
                     i += 1
-
+    
                 # plot each condition within each grouping
                 if plot_each_condition:
-                    plt.figure()
-                    plt.scatter(lst_resp, lst_nn_score, c=['#EB2027', '#29ABE2', '#00A64F', '#A87C4F', '#231F20'])
-                    plt.axline((0, 0), slope=1, color='k', ls='--')
-                    plt.xlabel('Response Gene F1 score')
-                    plt.ylabel('IRIS F1 score')
-                    plt.title(grouping+', '+combo)
-                    plt.xlim([0, 1])
-                    plt.ylim([0, 1])
-                    plt.show()
+                    plot_f1(resp, nn, grouping+', '+combo)
+                
+                lst_resp.extend(resp)
+                lst_nn_score.extend(nn)
 
             # plot per grouping, aggregating all conditions
-            plt.figure()
-            plt.scatter(lst_resp, lst_nn_score, c=['#EB2027', '#29ABE2', '#00A64F', '#A87C4F', '#231F20'] * count)
-            plt.axline((0, 0), slope=1, color='k', ls='--')
-            plt.xlabel('Response Gene F1 score')
-            plt.ylabel('IRIS F1 score')
-            plt.title(grouping)
-            plt.xlim([0, 1])
-            plt.ylim([0, 1])
-            plt.show()
+            plot_f1(lst_resp, lst_nn_score, grouping, count)
                     
         return lst_nn_score, lst_resp
 
@@ -842,7 +634,6 @@ class IRIS:
         random_combos = list(generate_random(num_random, reference, distance))
 
         num_bitflip = num - num_random
-        # assuming only one reference sequence to bitflip off of, but could be more
         bitflip_combos = generate_bitflip(num_bitflip, [reference])
 
         return random_combos + bitflip_combos
@@ -918,8 +709,7 @@ class IRIS:
             if resample_labels:
                 adata_in.obs[signal+'_class'] = np.random.choice(['Stim', 'Ctrl'], len(adata_in))
 
-        # adata_out.obs['celltype'] = 'unknown' # not sure if obscuring cell type too is desired
-
+        adata_out.obs['celltype'] = 'unknown'
         adata = ad.concat([adata_in, adata_out])
 
         # original data 
@@ -1211,7 +1001,7 @@ class IRIS:
                 out_results = df[np.isin(adata_full_giff2.obs.index, out_index)]
                 name = classification.split('_')[0] + '_resp_zorn'
 
-                threshold = self.find_optimal_cutoff((adata_full_gifford.obs[classification] == "Stim").values.astype(int), adata_full_gifford.obs[name])
+                threshold = find_optimal_cutoff((adata_full_gifford.obs[classification] == "Stim").values.astype(int), adata_full_gifford.obs[name])
 
                 if metric == "AUROC":
                     fpr, tpr, _ = skm.roc_curve((truth[:, i] == "Stim").astype(int), out_results[classification])
@@ -1239,51 +1029,8 @@ class IRIS:
         m = len(validation_batches)
 
         avgd_iris_x, avgd_iris_y, avgd_resp_x, avgd_resp_y = average_metrics(iris_x, iris_y, resp_x, resp_y, n, m)
-        self.plot_iris_metric(avgd_resp_x, avgd_resp_y, avgd_iris_x, avgd_iris_y, metric)
+        plot_iris_metric(avgd_resp_x, avgd_resp_y, avgd_iris_x, avgd_iris_y, metric, self.signals)
         plt.show()
-    
-    def calc_enrichment(
-            self, 
-            vae: VAE, 
-            adata: AnnData
-        ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        '''
-        Helper function that calculates enrichment score using GSEApy.
-
-        Args:
-            vae: VAE model to extract gradients from
-            adata: AnnData object
-
-        Returns:
-            pre_res.res2d['NES']: 'NES' column of GSEApy preprank
-            pre_res.res2d['Term']: 'Term' column of GSEApy prerank
-        '''
-        for param in vae.module.parameters():
-            x = (param.grad)
-            break
-            
-        arr = np.divide(np.abs(x.cpu().numpy()), 1)
-        arr[(arr == np.inf)] = 0
-        
-        df = pd.DataFrame({'0': adata.var.index,'1':arr})
-        df.index = df['0']
-        df = df.drop('0', axis=1)
-        
-        pre_res = gp.prerank(rnk=df, # or rnk = rnk,
-                        gene_sets='KEGG_2016',
-                        threads=4,
-                        min_size=5,
-                        max_size=1000,
-                        permutation_num=1000, # reduce number to speed up testing
-                        outdir=None, # don't write to disk
-                        seed=6,
-                        verbose=True, # see what's going on behind the scenes
-                        )
-
-        # categorical scatterplot
-        pre_res.res2d.index = pre_res.res2d['Term']
-        
-        return pre_res.res2d['NES'], pre_res.res2d['Term']
 
     def gsea_saliency(
             self, 
@@ -1315,7 +1062,7 @@ class IRIS:
             # train vae
             for v_epoch in range(vae_epochs):
                 vae.train(max_epochs=200)
-                score, term = self.calc_enrichment(vae, adata)
+                score, term = calc_enrichment(vae, adata)
                 if df.empty:
                     df.index = term
                 df['vae='+str(v_epoch)+'_scanvi=0'] = score
@@ -1324,7 +1071,7 @@ class IRIS:
                 for sc_epoch in range(scanvae_epochs):
                     name = 'vae='+str(v_epoch)+'_scanvi=' + str(sc_epoch)
                     scanvae.train(max_epochs=9)
-                    score, term = self.calc_enrichment(scanvae, adata)
+                    score, term = calc_enrichment(scanvae, adata)
                     df[name] = score
                     scanvae.save('gsea_'+signal+'_'+name)
             # save gsea scores to csv
@@ -1364,7 +1111,7 @@ class IRIS:
             df.index = lst
             # df = df.loc[:, ~df.columns.str.contains('scanvi=0')] if undetermined amt of scanvi training
             df = df.loc[:, df.columns.str.contains('scanvi=1') | df.columns.str.contains('scanvi=2')]
-            df.columns = [6, 9] # TODO: not sure where 6 and 9 are coming from & how to theoreotically expand
+            df.columns = [6, 9] 
             df = df.loc[df_average.index]
             ax = sns.heatmap(df, vmin=-1.5, vmax=1.5)
             plt.savefig(signal + '_gsea_averaged_scanvi.svg')
@@ -1445,16 +1192,15 @@ class IRIS:
                 # randomize more genes
                 goi = ''
                 for val in genes:
-                    df[val] = random.choices(df[val], k=len(df))
+                    df[val] = choices(df[val], k=len(df))
                     if val in annot_genes:
                         goi += val + ' '
 
-                adata.X = scipy.sparse.csr_matrix(df.values)
+                adata.X = csr_matrix(df.values)
                 adata.layers['counts'] = adata.X 
                 adata_out = adata.obs[signal + '_class'][np.isin(adata.obs['batch'], test_batches)]
 
                 model = scvi.model.SCANVI.load(modelpath, adata)
-
                 res = model.predict(adata[np.isin(adata.obs['batch'], test_batches)]) 
                 score = skm.roc_auc_score(adata_out, res, pos_label = 'Stim')
                 test_results.append(score)
@@ -1478,148 +1224,6 @@ class IRIS:
             auroc_scores[feature] = test_results
 
         return auroc_scores
-    
-    def linear_score(
-            self, 
-            adata_in: AnnData, 
-            adata_out: AnnData, 
-            sigs: list[str], 
-            metric: str,
-            clf: Pipeline, 
-            use_batch: bool = False, 
-            use_celltype: bool = False, 
-            use_species: bool = False
-        ) -> tuple[list[float], list[float]]:
-        '''
-        Helper function that calculates given metric with given pipeline for each signal.
-
-        Args:
-            adata_in: AnnData object for models to be trained on
-            adata_out: AnnData object for models to be tested on
-            sigs: list of strings of signals
-            metric: string of "AUROC", "AUPRC", or "F1"
-            clf: sklearn Pipeline instance
-            use_batch: boolean, train on batch identity
-            use_celltype: boolean, train on celltype identity
-            use_species: boolean, train on species identity
-
-        Returns:
-            lst_insample: list of metric score on training data
-            lst_outsample: list of metric score on testing data
-        '''
-        lst_insample = []
-        lst_outsample = []
-        
-        enc = OneHotEncoder(handle_unknown='ignore')    
-        
-        if ((use_batch == False) & (use_celltype == False) & (use_species == False)):
-            train_x = adata_in.X.copy()
-            test_x = adata_out.X.copy()
-                
-        elif ((use_batch == True) & (use_celltype == False) & (use_species == False)):
-            batches_one_hot = enc.fit_transform(adata_in.obs['batch'].values.reshape(-1, 1))
-            train_x = hstack((adata_in.X, batches_one_hot)).copy()
-            batches_one_hot = enc.transform(adata_out.obs['batch'].values.reshape(-1, 1))
-            test_x = hstack((adata_out.X, batches_one_hot)).copy()
-
-        elif ((use_batch == True) & (use_celltype == False) & (use_species == True)):
-            one_hot_encoding = enc.fit_transform(adata_in.obs[['batch', 'species']])
-            train_x = hstack((adata_in.X, one_hot_encoding)).copy()
-            one_hot_encoding = enc.transform(adata_out.obs[['batch', 'species']])
-            test_x = hstack((adata_out.X, one_hot_encoding)).copy()
-            
-        else:
-            one_hot_encoding = enc.fit_transform(adata_in.obs[['batch', 'celltype', 'species']])
-            train_x = hstack((adata_in.X, one_hot_encoding)).copy()
-            one_hot_encoding = enc.transform(adata_out.obs[['batch', 'celltype', 'species']])
-            test_x = hstack((adata_out.X, one_hot_encoding)).copy()
-            
-        for val in sigs:
-            train_y = adata_in.obs[val+'_class']
-            test_y = adata_out.obs[val+'_class']
-            clf.fit(train_x, train_y)
-
-            in_score, out_score = None, None
-
-            if metric == 'AUPRC':
-                precision, recall, _ = skm.precision_recall_curve((train_y == "Stim").astype(int), clf.predict_proba(train_x)[:, 1])
-                in_score = skm.auc(recall, precision)
-                precision, recall, _ = skm.precision_recall_curve((test_y == "Stim").astype(int), clf.predict_proba(test_x)[:, 1])
-                out_score = skm.auc(recall, precision)
-            elif metric == 'AUROC':
-                in_score = skm.roc_auc_score(train_y, clf.predict_proba(train_x)[:, 1])
-                out_score = skm.roc_auc_score(test_y, clf.predict_proba(test_x)[:, 1])
-            elif metric == 'F1':
-                in_score = skm.f1_score(train_y, clf.predict(train_x), pos_label = 'Stim')
-                out_score = skm.f1_score(test_y, clf.predict(test_x), pos_label = 'Stim')
-
-            lst_insample.append(in_score)
-            lst_outsample.append(out_score)
-        
-        return lst_insample, lst_outsample
-    
-    def run_benchmarking(
-            self, 
-            adata_in: AnnData, 
-            adata_out: AnnData, 
-            sigs: list[str], 
-            metric: str, 
-            use_batch: bool = False, 
-            use_celltype: bool = False, 
-            use_species: bool = False
-        ) -> pd.DataFrame:
-        '''
-        Helper function that makes evaluation pipeline and predicts using an SVM, elastic net, 
-        random forest. Returns pandas dataframe of scores of linear models.
-
-        Args:
-            adata_in: AnnData object for models to be trained on
-            adata_out: AnnData object for models to be tested on
-            sigs: list of strings of signals
-            metric: string of "AUROC", "AUPRC", or "F1"
-            use_batch: boolean, train on batch identity
-            use_celltype: boolean, train on celltype identity
-            use_species: boolean, train on species identity
-
-        Returns:
-            df: pandas dataframe of calculated linear model scores
-        '''
-        df = pd.DataFrame({}, index=sigs)
-
-        # SVM calculation
-        kernel = 'linear'
-        for c in np.logspace(0, 3, 3):
-            in_sample, out_sample = self.linear_score(adata_in, adata_out, sigs, metric, make_pipeline(
-                Normalizer(), decomposition.PCA(n_components=100, svd_solver='arpack'), svm.SVC(C=c, kernel=kernel, probability=True)
-                ), use_batch, use_celltype, use_species)
-            # print(kernel)
-            colname = 'svm' + kernel + '_' + str(c)
-            df['in-' + colname] = in_sample
-            df['out-' + colname] = out_sample
-                            
-        # Elastic net calculation
-        loss = 'log_loss'
-        for penalty in ['elasticnet']:
-            for alpha in np.logspace(-6, 0, 7):
-                    in_sample, out_sample = self.linear_score(adata_in, adata_out, sigs, metric, make_pipeline(
-                        Normalizer(), SGDClassifier(loss=loss, penalty=penalty, alpha=alpha, max_iter=1000, tol=1e-3)
-                        ), use_batch, use_celltype, use_species)
-                    colname = 'sgd_' + loss + '_' + penalty + '_' + str(alpha) + '_'
-                    df['in' + colname] = in_sample
-                    df['out' + colname] = out_sample
-    
-        # Random forest calculation
-        for n_estimators in [10, 100, 1000]: 
-            for criterion in ['gini', 'entropy', 'log_loss']:
-                for max_depth in [None, 2, 4, 8, 16]:
-                    in_sample, out_sample = self.linear_score(adata_in, adata_out, sigs, metric, make_pipeline(
-                        Normalizer(), decomposition.PCA(n_components=100, svd_solver='arpack'), RandomForestClassifier(n_estimators=n_estimators, criterion=criterion, max_depth=max_depth)
-                        ), use_batch, use_celltype, use_species)
-                    colname = 'rf_' + str(n_estimators) + '_' + criterion + '_' + str(max_depth)
-                    df['in' + colname] = in_sample
-                    df['out' + colname] = out_sample
-        
-        return df
 
     def linear_benchmark(
             self, 
@@ -1647,7 +1251,7 @@ class IRIS:
             adata_in = adata_sub[np.isin(adata_sub.obs['batch'], in_batches)]
             adata_out = adata_sub[np.isin(adata_sub.obs['batch'], [batch])]
             out_name = 'benchmarking_in_'+str(in_batches)+'_out_'+str(batch)+'_'+metric+'.csv'
-            score_df = self.run_benchmarking(adata_in, adata_out, self.signals, metric)
+            score_df = run_benchmarking(adata_in, adata_out, self.signals, metric)
             score_df.to_csv(out_name)
             filenames.append(out_name)
 

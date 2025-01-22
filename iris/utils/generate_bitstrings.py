@@ -1,3 +1,5 @@
+# helper function for generating bitstrings
+
 import time
 import random
 
