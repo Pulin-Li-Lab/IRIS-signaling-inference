@@ -276,7 +276,7 @@ class IRIS:
                 Returns [] if no components identified
         ''' 
         long_name = ''.join(trajectory)
-        
+
         # check if best components already found or adata obj w diffmap already exists
         exists = False
         for diffmap in self.diffmaps:
@@ -359,25 +359,27 @@ class IRIS:
         
     def run_model(
             self, 
-            train_batches: list[int], 
-            test_batches: list[int], 
             out_path: str, 
+            train_batches: list[int] = None, 
+            test_batches: list[int] = None, 
             n_layers: int = 2, 
             n_latent: int = 30,
             vae_epochs: int = 100,
             scanvi_epochs: int = 10
-        ) -> pd.DataFrame:
+        ) -> tuple[pd.DataFrame, AnnData]:
         '''
-        Creates and runs VAE model contained in IRIS object with given hyperparameters. Model 
-        runs with random 80/20 train/test split across all batches and conditions, and obscures 
-        cell type identity in training data.  Stores final trained models for each signal into 
-        models attribute of the IRIS object (IRIS.models). Saves model predictions dataframe 
-        into csv file at outpath. Returns pandas dataframe of predictions.
+        Creates and runs VAE model contained in IRIS object with given hyperparameters. If 
+        explicit train/test batches are given, obscures celltype information from test batches 
+        and uses all of the train_batches to train. If explicit batches are not given, runs 
+        with random 80/20 train/test split across all batches and conditions. Stores final 
+        trained models for each signal into models attribute of the IRIS object (IRIS.models). 
+        Saves model predictions dataframe into csv file at outpath. Returns pandas dataframe 
+        of predictions and AnnData object representing test set with predictions as a column.
         
         Args:
+            out_path: string of filename to write results to
             train_batches: list of integers of batches to obscure while training 
             test_batches: list of integers of batches to keep labels for
-            out_path: string of filename to write results to
             n_layers: number of hidden layers, default 2
             n_latent: dimensionality of latent space, default 30
             vae_epochs: integer number of epochs to train VAE, default 100
@@ -385,39 +387,62 @@ class IRIS:
 
         Returns:
             df: pandas DataFrame of prediction of presence of each signal (0 to 1)
+            adata_results: AnnData of test population with IRIS predictions as columns 
         '''
         self.anndata.obs['Clusters'] = "unknown"
 
-        adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], train_batches + test_batches)]
-    
-        held_out = np.random.choice(adata_full_gifford.obs.index, size=int(len(adata_full_gifford.obs.index)*0.2))
-        
-        df_val = adata_full_gifford.obs.loc[held_out, :].copy()
-        
+        # hold out random 20% of all data 
+        if not train_batches or not test_batches:
+            adata_full_gifford = self.anndata
+            held_out = np.random.choice(adata_full_gifford.obs.index, size=int(len(adata_full_gifford.obs.index)*0.2))
+        # hold out batches identified as test set
+        else:
+            adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], train_batches + test_batches)]
+            held_out =  adata_full_gifford.obs.index[np.isin(adata_full_gifford.obs['batch'], test_batches)]
+
+        adata_results = adata_full_gifford[held_out]
+                
         adata_full_gifford.layers['counts'] = adata_full_gifford.X
         adata_full_gifford = adata_full_gifford.copy()
-        
+        # obscure cell type information
         adata_full_gifford.obs['celltype'] = adata_full_gifford.obs['celltype'].cat.add_categories('unknown')
-        adata_full_gifford.obs.loc[adata_full_gifford.obs[np.isin(adata_full_gifford.obs['batch'], train_batches)].index, 'celltype'] = 'unknown'
+        adata_full_gifford.obs.loc[held_out, 'celltype'] = 'unknown'
 
+        # initialize model
         vae = self.set_scvi_model(adata_full_gifford, n_layers=n_layers, n_latent=n_latent, epochs=vae_epochs)
 
         df = pd.DataFrame({}, index=adata_full_gifford[held_out].obs.index)
 
+        # obscure true signal values
         class_names = []
         for signal in self.signals:
             class_names.append(signal + '_class')
             adata_full_gifford.obs.loc[held_out, signal + '_class'] = "unknown"
 
+        # predict
         for val in class_names:
             scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=val, unlabeled_category = "unknown")
             scanvae.train(max_epochs=scanvi_epochs)
-            df[val] = scanvae.predict(adata_full_gifford[held_out], soft=True)['Stim'].values
+            predictions = scanvae.predict(adata_full_gifford[held_out])
+            df[val] = predictions
+            adata_results.obs[val+'_predictions'] = predictions
+
             self.models[val] = scanvae
         
         df.to_csv(out_path)
 
-        return df
+        return df, adata_results
+    
+    def find_predicted_state(
+            self,
+            state: str
+    ) -> None:
+        '''
+        given state as string ex. '01100', finds which cells are predicted by IRIS to 
+        have this particular state, and creates boolean column in AnnData object
+        '''
+        # TODO: fill this in, deicde if uses self.anndata or uses a passed in anndata obj
+        pass
     
     def validate_adata(
             self, 
@@ -461,8 +486,8 @@ class IRIS:
         for all pathways. Uses stored AnnData object in IRIS.anndata as ground truth
         
         Args:
-            iris_preds: pandas DataFrame of IRIS predictions. Expects predictions from 
-                soft=True, rather than categorical predictions, like in run_model
+            iris_preds: pandas DataFrame of IRIS predictions. Expects categorical 
+                predictions, like from run_model.
             batches: list of integers of batches from anndata object to use
             signals: list of strings of signals to calculate score on (ex. ["Wnt"]); 
                 if not given, all signals are used

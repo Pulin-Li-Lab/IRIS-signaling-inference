@@ -137,7 +137,8 @@ def score_predictions(
     Calculates score of IRIS predictions on given metric. 
 
     Args:
-        iris_preds: pandas DataFrame of IRIS predictions, like from run_model. expects 
+        iris_preds: pandas DataFrame of IRIS predictions, like from run_model. Expects 
+            categorical predictions
         adata: AnnData object to use as ground truth of predictions
         metric: string of desired statistics; if not given, all metrics are computed
         signals: list of strings of signals to calculate score on (ex. ["Wnt"]); 
@@ -164,9 +165,9 @@ def score_predictions(
         threshold = find_optimal_cutoff((adata.obs[class_name] == 'Stim').astype(int), adata.obs[resp_name])
 
         if metric == "AUROC":
-            score = roc_auc_score((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
+            score = roc_auc_score((adata.obs[class_name] == 'Stim').astype(int), (iris_preds[class_name] == 'Stim').astype(int))
             if plot:
-                fpr, tpr, _ = roc_curve((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
+                fpr, tpr, _ = roc_curve(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
                 iris_x.append(fpr)
                 iris_y.append(tpr)
 
@@ -174,9 +175,9 @@ def score_predictions(
                 resp_x.append(fpr)
                 resp_y.append(tpr)
         elif metric == "F1":
-            score = f1_score((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
+            score = f1_score(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
         elif metric == "AUPRC":
-            precision, recall, _ = precision_recall_curve((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
+            precision, recall, _ = precision_recall_curve(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
             score = auc(recall, precision)
             if plot:
                 iris_x.append(recall)
