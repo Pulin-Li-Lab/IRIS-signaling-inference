@@ -435,14 +435,32 @@ class IRIS:
     
     def find_predicted_state(
             self,
-            state: str
-    ) -> None:
+            adata: AnnData,
+            state: dict[str, int]
+        ) -> AnnData:
         '''
-        given state as string ex. '01100', finds which cells are predicted by IRIS to 
-        have this particular state, and creates boolean column in AnnData object
+        Given particular signaling state as a dictionary ex. {'RA': 1, 'Wnt': 0, ..}, 
+        identifies which cells are predicted by IRIS to have that signaling state. 
+        Takes AnnData object where IRIS predictions are contained in columns (like 
+        from run_model), and creates Boolean column of matches to the given state. 
+        Returns given AnnData object.
+
+        Args:
+            adata: AnnData object with IRIS predictions
+            state: dictionary of string of signal to 1/0 for on/off
+
+        Returns:
+            adata: AnnData object with match to state as a column
         '''
-        # TODO: fill this in, deicde if uses self.anndata or uses a passed in anndata obj
-        pass
+        matches = np.ones(len(adata), dtype=bool)
+        # loop through each signal and check if the predictions match the mapping
+        for signal, target_value in state.items():
+            # map 'Stim' to 1 and 'Ctrl' to 0
+            signal_matches = (adata.obs[f"{signal}_class_predictions"].map({'Stim': 1, 'Ctrl': 0}).values == target_value)
+            matches_mapping &= signal_matches
+
+        adata.obs['match'] = matches
+        return adata
     
     def validate_adata(
             self, 
