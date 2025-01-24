@@ -426,6 +426,7 @@ class IRIS:
             predictions = scanvae.predict(adata_full_gifford[held_out])
             df[val] = predictions
             adata_results.obs[val+'_predictions'] = predictions
+            scanvae.save(val+'_vae='+vae_epochs+'_scanvi='+scanvi_epochs)
 
             self.models[val] = scanvae
         
@@ -493,7 +494,7 @@ class IRIS:
     def evaluate(
             self, 
             iris_preds: pd.DataFrame,
-            batches: list[int],
+            batches: list[int] = None,
             signals: list[str] = None, 
             metrics: list[str] = None, 
             plot: bool = True
@@ -521,7 +522,10 @@ class IRIS:
         if not metrics:
             metrics = ["AUROC", "AUPRC", "F1"]
 
-        adata = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
+        if batches:
+            adata = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
+        else:
+            adata = self.anndata
 
         final_scores = {}
 
@@ -565,9 +569,15 @@ class IRIS:
             return -1, -1
 
         self.anndata.obs['Clusters'] = "unknown"
-        self.response_gene(batches)
+        
+        if batches:
+            self.response_gene(batches)
+            adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
+        else:
+            batches = self.anndata.obs['batch'].unique().tolist()
+            self.response_gene()
+            adata_full_gifford = self.anndata
 
-        adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
         adata_full_gifford.layers['counts'] = adata_full_gifford.X
         adata_full_gifford = adata_full_gifford.copy()
 
@@ -1197,7 +1207,10 @@ class IRIS:
         '''
         auroc_scores = {}
         adata = self.anndata
-        annot_genes = set(annot_genes)
+        if annot_genes:
+            annot_genes = set(annot_genes)
+        else:
+            annot_genes = set()
 
         for feature in features:
             test_results = []
@@ -1221,7 +1234,8 @@ class IRIS:
             i = 0
             n = len(variable_genes)
             x_axis = []
-            gene_annotations = {}
+            if annot_genes:
+                gene_annotations = {}
 
             while i < n:
                 if i + batch_size > n - 1:
@@ -1249,7 +1263,7 @@ class IRIS:
                 test_results.append(score)
 
                 if goi != '':
-                    gene_annotations[goi] = (point,score)
+                    gene_annotations[goi] = (point, score)
 
                 i += batch_size
             
@@ -1259,10 +1273,11 @@ class IRIS:
             plt.xlabel(feature + ' rank')
             plt.ylabel('AUROC')
 
-            # annotate points with genes of interest
-            for label, (x_point, y_point) in gene_annotations.items():
-                plt.scatter(x_point, y_point, color="red")  # highlight points
-                plt.text(x_point, y_point, label, fontsize=8, color="black", ha='left', va='bottom')
+            if annot_genes:
+                # annotate points with genes of interest
+                for label, (x_point, y_point) in gene_annotations.items():
+                    plt.scatter(x_point, y_point, color="red")  # highlight points
+                    plt.text(x_point, y_point, label, fontsize=8, color="black", ha='left', va='bottom')
 
             auroc_scores[feature] = test_results
 
