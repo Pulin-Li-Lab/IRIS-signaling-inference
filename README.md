@@ -3,7 +3,12 @@ code repository for Hutchins et al. "Reconstructing signaling history of single 
 
 
 ## Installation
-Create a Conda environment with Python=3.9. Activate the virtual environment and run these commands:
+[Create a Conda environment](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html#creating-an-environment-with-commands) with Python=3.9, and activate the virtual environment:
+```
+conda create -n <my_env> python=3.9
+conda activate <my_env>
+```
+Clone this repo:
 ```
 git clone https://github.com/Pulin-Li-Lab/IRIS-signaling-inference.git
 cd IRIS-signaling-inference
