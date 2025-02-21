@@ -106,6 +106,9 @@ def plot_iris_metric(
     '''
     colors = ['#D62728', '#17BECF', '#2CA02C', 'black', '#8C564B', 'orange']
 
+    if metric == 'F1':
+        plot_f1(resp_pred_1, iris_pred_1, 'F1 Score of Predictions')
+
     plt.figure()
     for i in range(len(iris_pred_1)):
         if plot_resp:
@@ -181,7 +184,11 @@ def score_predictions(
                 resp_x.append(fpr)
                 resp_y.append(tpr)
         elif metric == "F1":
-            score = f1_score(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
+            score = f1_score((adata.obs[class_name] == 'Stim').astype(int), (iris_preds[class_name] == 'Stim').astype(int))
+            iris_x.append(score)
+            score = f1_score(adata.obs[class_name] == "Stim").astype(int), (adata.obs[resp_name].values > threshold).astype(int)
+            resp_x.append(score)
+
         elif metric == "AUPRC":
             precision, recall, _ = precision_recall_curve(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
             score = auc(recall, precision)
@@ -217,7 +224,7 @@ def plot_f1(
         count: number of samples of scores, default 1
     '''
     plt.figure()
-    plt.scatter(lst_resp, lst_nn_score, c=['#EB2027', '#29ABE2', '#00A64F', '#A87C4F', '#231F20'] * count)
+    plt.scatter(lst_resp, lst_nn_score, c=['#EB2027', '#29ABE2', '#00A64F', '#A87C4F', '#231F20', 'orange'] * count)
     plt.axline((0, 0), slope=1, color='k', ls='--')
     plt.xlabel('Response Gene F1 score')
     plt.ylabel('IRIS F1 score')

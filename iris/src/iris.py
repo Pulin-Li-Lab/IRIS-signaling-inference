@@ -17,10 +17,10 @@ from csv import reader as csv_reader
 from scipy.sparse import csr_matrix
 from random import choices
 
-from utils.generate_bitstrings import generate_bitflip, generate_random
-from utils.plotting import average_metrics, find_optimal_cutoff, plot_iris_metric, score_predictions, plot_f1
-from utils.benchmarking import run_benchmarking
-from utils.analysis import get_components, calc_enrichment
+from ..utils.generate_bitstrings import generate_bitflip, generate_random
+from ..utils.plotting import average_metrics, find_optimal_cutoff, plot_iris_metric, score_predictions, plot_f1
+from ..utils.benchmarking import run_benchmarking
+from ..utils.analysis import get_components, calc_enrichment
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -354,7 +354,7 @@ class IRIS:
         scvi.model.SCVI.setup_anndata(data, layer="counts", batch_key='batch', categorical_covariate_keys=['celltype'])
         # sets up model with this anndata
         vae = scvi.model.SCVI(data, n_layers=n_layers, n_latent=n_latent, n_hidden=n_hidden, gene_likelihood="zinb")
-        vae.train(max_epochs=epochs, use_gpu=True, validation_size=0.1, early_stopping=True)
+        vae.train(max_epochs=epochs, validation_size=0.1, early_stopping=True)
         vae.save('vae_'+str(n_layers)+'_'+str(n_latent)+'_'+str(n_hidden)+'_'+str(epochs))
         return vae
         
@@ -393,19 +393,15 @@ class IRIS:
         self.anndata.obs['Clusters'] = "unknown"
 
         # hold out random 20% of all data 
-        if not train_batches:
+        if not train_batches and not test_batches:
             adata_full_gifford = self.anndata
-        elif not test_batches:
-            adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], train_batches)]
             held_out = np.random.choice(adata_full_gifford.obs.index, size=int(len(adata_full_gifford.obs.index)*0.2))
         # hold out batches identified as test set
         else:
             adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], train_batches + test_batches)]
             held_out =  adata_full_gifford.obs.index[np.isin(adata_full_gifford.obs['batch'], test_batches)]
 
-        adata_results = adata_full_gifford[np.isin(adata_full_gifford.obs['batch'], test_batches)]
-        # adata_results = adata_full_gifford[held_out]
-                # TODO: double check held out
+        adata_results = adata_full_gifford[held_out]
         adata_full_gifford.layers['counts'] = adata_full_gifford.X
         adata_full_gifford = adata_full_gifford.copy()
         # obscure cell type information
@@ -521,7 +517,8 @@ class IRIS:
                 if not given, all signals are used
             metrics: list of strings of desired statistics; if not given, all metrics are computed
             plot: whether or not to display AUROC, AUPRC curves (default True)
-            plot_resp: boolean to plot response gene method performance (default False)
+            plot_resp: boolean to plot response gene method performance for AUROC / 
+                AUPRC (default False)
 
         Returns:
             scores: dictionary of dictionaries where keys are signals (RA, WNT, etc.) and 
