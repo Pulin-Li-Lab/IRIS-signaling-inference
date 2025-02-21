@@ -2,7 +2,9 @@
 code repository for Hutchins et al. "Reconstructing signaling history of single cells via statistical inference" (2025)
 
 ## Overview
-- class-based method
+IRIS is a set of algorithms and functionalities that analyze scRNA-seq data. IRIS can make predictions on cell signaling state by leveraging probabilistic models, generate and plot diffusion maps of cell types, and perform a collection of other kinds of analysis on the single-cell data. IRIS relies heavily on [AnnData](https://anndata.readthedocs.io/en/stable/) and [scvi-tools](https://scvi-tools.org/) - it expects data in the form of an AnnData object and uses SCVI and SCANVI models to make predictions. 
+
+To use IRIS, you initialize an `IRIS` object, and call the various IRIS functionalities via 'IRIS.<function>'. Each function in IRIS has a well-documented docstring that explains the expected inputs, any outputs, and generally what the function does. 
 
 ## System Requirements
 ### GPU Access
@@ -54,4 +56,5 @@ from IRIS_signaling_inference.iris.src.iris import IRIS
 Then, you can create IRIS objects and use their functions! 
 ```
 iris_obj = IRIS('test', anndata = data)
+iris_obj.response_gene() # for example
 ```
