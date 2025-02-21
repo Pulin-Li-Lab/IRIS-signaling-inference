@@ -1,5 +1,6 @@
 # IRIS-signaling-inference
 Code repository for Hutchins et al. "Reconstructing signaling history of single cells via statistical inference" (2025). 
+
 ![IRIS figure](fig.png)
 
 ## Overview
@@ -37,6 +38,7 @@ curl https://sh.rustup.rs -sSf | sh -s -- -y
 export PATH="$PATH:$HOME/.cargo/bin"
 pip install git+https://github.com/zqfang/gseapy.git#egg=gseapy
 ```
+In total, the entire installation process should only take a few minutes.
 
 ## Usage
 IRIS was primarily written to be imported as a module into a jupyter notebook (or similar), and called via `iris_obj.<function>`. You can view the example notebook [fig3+4.ipynb](https://github.com/Pulin-Li-Lab/IRIS-signaling-inference/blob/main/iris/examples/fig3%2B4.ipynb) for how to import and use IRIS from within this repo. 
