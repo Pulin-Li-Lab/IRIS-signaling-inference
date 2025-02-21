@@ -16,5 +16,10 @@ cd IRIS-signaling-inference
 Install the other required packages:
 ```
 pip install -r requirements.txt
-conda install -c bioconda gseapy
+```
+[gseapy](https://pypi.org/project/gseapy/1.1.3/) may be able to be installed via `pip install gseapy` for Windows and M1/M2 Macs. Otherwise, follow these commands:
+```
+curl https://sh.rustup.rs -sSf | sh -s -- -y
+export PATH="$PATH:$HOME/.cargo/bin"
+pip install git+https://github.com/zqfang/gseapy.git#egg=gseapy
 ```
