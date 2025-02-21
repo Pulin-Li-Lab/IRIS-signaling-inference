@@ -174,7 +174,7 @@ def score_predictions(
         threshold = find_optimal_cutoff((adata.obs[class_name] == 'Stim').astype(int), adata.obs[resp_name])
 
         if metric == "AUROC":
-            score = roc_auc_score((adata.obs[class_name] == 'Stim').astype(int), (iris_preds[class_name] == 'Stim').astype(int))
+            score = roc_auc_score((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
             if plot:
                 fpr, tpr, _ = roc_curve(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
                 iris_x.append(fpr)
@@ -184,9 +184,9 @@ def score_predictions(
                 resp_x.append(fpr)
                 resp_y.append(tpr)
         elif metric == "F1":
-            score = f1_score((adata.obs[class_name] == 'Stim').astype(int), (iris_preds[class_name] == 'Stim').astype(int))
+            score = f1_score(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
             iris_x.append(score)
-            score = f1_score(adata.obs[class_name] == "Stim").astype(int), (adata.obs[resp_name].values > threshold).astype(int)
+            score = f1_score((adata.obs[class_name] == "Stim").astype(int), (adata.obs[resp_name].values > threshold).astype(int))
             resp_x.append(score)
 
         elif metric == "AUPRC":

@@ -1,6 +1,17 @@
 # IRIS-signaling-inference
 code repository for Hutchins et al. "Reconstructing signaling history of single cells via statistical inference" (2025)
 
+## Overview
+- class-based method
+
+## System Requirements
+### GPU Access
+Since many components of IRIS leverage machine learning models, it is best to have access to a GPU so that model training and inference can be done more efficiently. If your computer does not come with a graphics card, we recommend running the machine learning methods of IRIS in a computing environment with access to a GPU. This code was tested through [jupyter notebooks](https://jupyter.org/) running on the Whitehead Institute compute cluster with Ubuntu 20.04, via a [SLURM](https://slurm.schedmd.com/documentation.html) job with access to an [NVIDIA RTX A6000 GPU](https://www.nvidia.com/en-us/design-visualization/rtx-a6000/). 
+
+### Software 
+There are several non-machine-learning methods in IRIS that can be run on a standard computer. IRIS has been tested on macOS and Linux, specifically:
+* macOS: Sonoma (14.6.1)
+* Linux: Ubuntu (20.04)
 
 ## Installation
 [Create a Conda environment](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html#creating-an-environment-with-commands) with Python=3.9, and activate the virtual environment:
@@ -22,4 +33,25 @@ pip install -r requirements.txt
 curl https://sh.rustup.rs -sSf | sh -s -- -y
 export PATH="$PATH:$HOME/.cargo/bin"
 pip install git+https://github.com/zqfang/gseapy.git#egg=gseapy
+```
+
+## Usage
+IRIS was primarily written to be imported as a module into a jupyter notebook (or similar), and called via `iris_obj.<function>`. You can view the example notebook [fig3+4.ipynb](https://github.com/Pulin-Li-Lab/IRIS-signaling-inference/blob/main/iris/examples/fig3%2B4.ipynb) for how to import and use IRIS from within this repo. 
+
+Otherwise, make sure that whatever notebook you are trying to run is in the same directory as where you have cloned the `IRIS-signaling-inference repo`. At the top of the notebook, include these lines:
+```
+import sys
+import os
+
+# get the absolute path to the base directory
+path = os.path.abspath(os.path.join(os.getcwd(), ".."))
+sys.path.append(path)
+```
+and import IRIS via:
+```
+from IRIS_signaling_inference.iris.src.iris import IRIS
+```
+Then, you can create IRIS objects and use their functions! 
+```
+iris_obj = IRIS('test', anndata = data)
 ```
