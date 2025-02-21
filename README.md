@@ -6,7 +6,7 @@ Code repository for Hutchins et al. "Reconstructing signaling history of single 
 ## Overview
 IRIS is a set of algorithms and functionalities that analyze scRNA-seq data. IRIS can make predictions on cell signaling state by leveraging probabilistic models, generate and plot diffusion maps of cell types, and perform a collection of other kinds of analysis on the single-cell data. IRIS relies heavily on [AnnData](https://anndata.readthedocs.io/en/stable/) and [scvi-tools](https://scvi-tools.org/) - it expects data in the form of an AnnData object and uses SCVI and SCANVI models to make predictions. 
 
-To use IRIS, you initialize an `IRIS` object, and call the various IRIS functionalities via 'IRIS.<function>'. Each function in IRIS has a well-documented docstring that explains the expected inputs, any outputs, and generally what the function does. 
+To use IRIS, you initialize an `IRIS` object, and call the various IRIS functionalities via `IRIS.<function>`. Each function in IRIS has a well-documented docstring that explains the expected inputs, any outputs, and generally what the function does. 
 
 ## System Requirements
 ### GPU Access
@@ -58,6 +58,14 @@ from IRIS_signaling_inference.iris.src.iris import IRIS
 ```
 Then, you can create IRIS objects and use their functions! 
 ```
-iris_obj = IRIS('test', anndata = data)
+iris_obj = IRIS('test', anndata = data) # set anndata = your own data
 iris_obj.response_gene() # for example
 ```
+
+## Example
+The example notebook [fig3+4.ipynb](https://github.com/Pulin-Li-Lab/IRIS-signaling-inference/blob/main/iris/examples/fig3%2B4.ipynb) uses IRIS to generate some of the plots used in Figures 3 and 4 in the paper, like panel C in the summary figure above. With a GPU, the notebook took about 10 minutes in total to run. Without a GPU, it may take around an hour on a standard computer. 
+
+The IRIS class contains the necessary functions to re-create every figure in the paper, arranged roughly chronologically.
+
+## Data
+A new single-cell dataset is included in [data/](https://github.com/Pulin-Li-Lab/IRIS-signaling-inference/tree/main/data). The dataset will also eventually be publicly available as a [NIH GEO dataset](https://www.ncbi.nlm.nih.gov/gds/?term=GSE289836). 

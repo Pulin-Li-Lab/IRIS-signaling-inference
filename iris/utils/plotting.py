@@ -211,6 +211,7 @@ def plot_f1(
         lst_resp: list,
         lst_nn_score: list,
         title: str,
+        legend: str,
         count: int = 1
 ) -> None:
     ''''
@@ -231,4 +232,5 @@ def plot_f1(
     plt.title(title)
     plt.xlim([0, 1])
     plt.ylim([0, 1])
+    plt.legend(legend)
     plt.show()

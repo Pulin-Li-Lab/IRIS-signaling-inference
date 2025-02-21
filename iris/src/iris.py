@@ -186,8 +186,9 @@ class IRIS:
 
         for signal in self.signals:
             name = signal + '_resp_zorn'
-            resp_lst = self.pathways[signal]
+            resp_lst = [gene for gene in self.pathways[signal] if gene in adata_gifford.var.index]
             mat = adata_gifford[:, resp_lst].X.todense()
+            mat[np.isnan(mat)] = 0
 
             # assuming mat columns are in same order as resp_lst
             for i in range(len(resp_lst)):
@@ -195,8 +196,9 @@ class IRIS:
                 weight = self.gene_weights[signal][gene]
                 mat[:,i] *= weight
 
-            mat = (mat - np.mean(mat, axis=1))/np.std(mat, axis=1)
-            mat[np.isnan(mat)] = 0
+            std = np.std(mat, axis=1)
+            std[std == 0] = 1
+            mat = (mat - np.mean(mat, axis=1))/std
             lst = []
             for val in np.array(mat.sum(axis=1)):
                 lst.append(val[0])
@@ -335,7 +337,8 @@ class IRIS:
             n_layers: int = 2, 
             n_latent: int = 30, 
             n_hidden: int = 128, 
-            epochs: int = 10
+            epochs: int = 10,
+            suffix: str = None
         ) -> VAE:
         '''
         Initializes SCVI model to use for IRIS analysis, returns model.
@@ -355,7 +358,10 @@ class IRIS:
         # sets up model with this anndata
         vae = scvi.model.SCVI(data, n_layers=n_layers, n_latent=n_latent, n_hidden=n_hidden, gene_likelihood="zinb")
         vae.train(max_epochs=epochs, validation_size=0.1, early_stopping=True)
-        vae.save('vae_'+str(n_layers)+'_'+str(n_latent)+'_'+str(n_hidden)+'_'+str(epochs))
+        name = str(n_layers)+'_'+str(n_latent)+'_'+str(n_hidden)+'_'+str(epochs)+'_'
+        if suffix:
+            name += str(suffix)
+        vae.save('models/' + name)
         return vae
         
     def run_model(
@@ -365,7 +371,7 @@ class IRIS:
             test_batches: list[int] = None, 
             n_layers: int = 2, 
             n_latent: int = 30,
-            vae_epochs: int = 125,
+            vae_epochs: int = 400,
             scanvi_epochs: int = 5
         ) -> tuple[pd.DataFrame, AnnData]:
         '''
@@ -431,6 +437,7 @@ class IRIS:
             predictions = scanvae.predict(adata_full_gifford[np.isin(adata_full_gifford.obs['batch'], test_batches)], soft=True)['Stim'].values
             df[val] = predictions
             adata_results.obs[val+'_predictions'] = predictions
+            scanvae.save('models/'+val+'_vae='+str(vae_epochs)+'_scanvi='+str(scanvi_epochs))
 
             self.models[val] = scanvae
         
@@ -538,6 +545,7 @@ class IRIS:
             batches = self.anndata.obs['batch'].unique().tolist()
             if self.signals[0] + '_resp_zorn' not in adata.obs:
                 self.response_gene(batches)
+            adata = adata[iris_preds['Unnamed: 0']]
 
         final_scores = {}
 
@@ -545,14 +553,15 @@ class IRIS:
             scores, iris_x, iris_y, resp_x, resp_y = score_predictions(iris_preds, adata, metric, signals, plot)
             plot_iris_metric(resp_x, resp_y, iris_x, iris_y, metric, signals, plot_resp)
             for signal in signals:
-                final_scores[signal] = {}
+                if signal not in final_scores:
+                    final_scores[signal] = {}
                 final_scores[signal][metric] = scores[signal]
 
         return final_scores 
     
     def held_out_condition_validation(
             self, 
-            batches: list[int], 
+            batches: list[int] = None, 
             condition: str = None, 
             category: str = None, 
             groupings: list[str] = None, 
@@ -606,10 +615,8 @@ class IRIS:
         # generate combinations to test
         if not condition:
             combos = adata_full_gifford.obs['code'].value_counts().index
-        elif len(condition) == 1:
-            combos = [condition]
         else:
-            combos = condition 
+            combos = [condition]
 
         lst_resp = []
         lst_nn_score = []
@@ -634,12 +641,15 @@ class IRIS:
                 # true data values
                 results = adata_cat_out.obs[class_names].values
                 adata_cat_out.obs[class_names] = 'unknown'
-                adata_full_giff2 = ad.concat([adata_non_cat, adata_cat_in, adata_cat_out])
+                if category:
+                    adata_full_giff2 = ad.concat([adata_non_cat, adata_cat_in, adata_cat_out])
+                else:
+                    adata_full_giff2 = ad.concat([adata_cat_in, adata_cat_out])
                 out_index = (adata_cat_out.obs.index)
                 df = pd.DataFrame({}, index=adata_full_giff2.obs.index)
 
                 # initialize VAE
-                vae = self.set_scvi_model(adata_full_giff2, epochs=25)
+                vae = self.set_scvi_model(adata_full_giff2, epochs=25, suffix='held_out_'+str(count))
 
                 i = 0
                 for classification in class_names:
@@ -649,26 +659,31 @@ class IRIS:
                     scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=classification, unlabeled_category = "unknown")
                     scanvae.train(max_epochs=5, batch_size=512)
                     self.models[classification] = scanvae
+                    scanvae.save('models/'+classification+'_held_out_'+combo+'_'+str(count))
                     # make predictions
                     df[classification] = scanvae.predict()
                     out_results = df[np.isin(adata_full_giff2.obs.index, out_index)]
                 
                     threshold = find_optimal_cutoff((adata_cat_in.obs[classification] == "Stim").values.astype(int), adata_cat_in.obs[classification.split('_')[0] + '_resp_zorn'])
                     
-                    if (results[0, i]) == "Stim":
+                    if (results[0, i] == 'Stim'):
                         nn.append(skm.f1_score(results[:, i], out_results[classification], pos_label='Stim'))
                         resp.append(skm.f1_score((results[:, i] == "Stim").astype(int), (adata_cat_out.obs[classification.split('_')[0] + '_resp_zorn'].values > threshold).astype(int)))
+                    else:
+                        nn.append(skm.f1_score(results[:, i], out_results[classification], pos_label='Ctrl'))
+                        resp.append(skm.f1_score((results[:, i] == "Ctrl").astype(int), (adata_cat_out.obs[classification.split('_')[0] + '_resp_zorn'].values > threshold).astype(int)))
                     i += 1
     
                 # plot each condition within each grouping
                 if plot_each_condition:
-                    plot_f1(resp, nn, grouping+', '+combo)
+                    plot_f1(resp, nn, grouping+', '+combo, legend=self.signals)
                 
                 lst_resp.extend(resp)
                 lst_nn_score.extend(nn)
 
+            name = 'Grouping: '+str(grouping)
             # plot per grouping, aggregating all conditions
-            plot_f1(lst_resp, lst_nn_score, grouping, count)
+            plot_f1(lst_resp, lst_nn_score, name, self.signals, count)
                     
         return lst_nn_score, lst_resp
 
@@ -745,7 +760,8 @@ class IRIS:
             parameters: list[int], 
             signal: str, 
             metrics: list[str], 
-            resample_labels: bool = False
+            resample_labels: bool = False,
+            vae_epochs: int = 175,
         ) -> dict[str, float]:
         '''
         Creates model with given hyperparameters, makes predictions, then scores predictions 
@@ -784,7 +800,7 @@ class IRIS:
         df = pd.DataFrame({}, index=adata.obs.index)
         suffix = '_in_'+str(train_batches)+'_out_'+str(test_batches)
 
-        vae = self.set_scvi_model(adata, layers, latent, hidden, 175) 
+        vae = self.set_scvi_model(adata, layers, latent, hidden, vae_epochs) 
         class_name = signal + '_class'
         outfile_name = 'vae_scanvi_layers_' + str(int(layers)) + '_hidden=' + str(int(hidden)) + '_latent=' + str(int(latent)) + '_' + class_name + '_' + suffix + '_rs.csv'
 
@@ -1069,7 +1085,7 @@ class IRIS:
                 threshold = find_optimal_cutoff((adata_full_gifford.obs[classification] == "Stim").values.astype(int), adata_full_gifford.obs[name])
 
                 if metric == "AUROC":
-                    fpr, tpr, _ = skm.roc_curve((truth[:, i] == "Stim").astype(int), out_results[classification])
+                    fpr, tpr, _ = skm.roc_curve(truth[:, i], out_results[classification], pos_label='Stim')
                     iris_y.append(tpr)
                     iris_x.append(fpr)
 
@@ -1077,7 +1093,7 @@ class IRIS:
                     resp_y.append(tpr)
                     resp_x.append(fpr)
                 elif metric == "AUPRC":
-                    precision, recall, _ = skm.precision_recall_curve((truth[:, i] == "Stim").astype(int), out_results[classification])
+                    precision, recall, _ = skm.precision_recall_curve(truth[:, i], out_results[classification], pos_label='Stim')
                     iris_y.append(precision)
                     iris_x.append(recall)
 
@@ -1339,7 +1355,6 @@ class IRIS:
         df_averaged.loc[:, df.columns.str.contains('outrf')].idxmax(axis=1)
 
         # plotting
-        sns.set(style='white', font_scale=1, rc={'figure.figsize':(20,8)})
         sns.heatmap(df_averaged.iloc[:, df_averaged.columns.str.contains('out')], square=True)
         plt.xticks(rotation=90)
         plt.savefig('cross-val-out-benchmarking.svg')
