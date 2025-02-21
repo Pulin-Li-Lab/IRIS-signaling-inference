@@ -17,10 +17,10 @@ from csv import reader as csv_reader
 from scipy.sparse import csr_matrix
 from random import choices
 
-from ..utils.generate_bitstrings import generate_bitflip, generate_random
-from ..utils.plotting import average_metrics, find_optimal_cutoff, plot_iris_metric, score_predictions, plot_f1
-from ..utils.benchmarking import run_benchmarking
-from ..utils.analysis import get_components, calc_enrichment
+from utils.generate_bitstrings import generate_bitflip, generate_random
+from utils.plotting import average_metrics, find_optimal_cutoff, plot_iris_metric, score_predictions, plot_f1
+from utils.benchmarking import run_benchmarking
+from utils.analysis import get_components, calc_enrichment
 
 if TYPE_CHECKING:
     from anndata import AnnData
