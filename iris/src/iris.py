@@ -17,10 +17,10 @@ from csv import reader as csv_reader
 from scipy.sparse import csr_matrix
 from random import choices
 
-from iris.utils.generate_bitstrings import generate_bitflip, generate_random
-from iris.utils.plotting import average_metrics, find_optimal_cutoff, plot_iris_metric, score_predictions, plot_f1
-from iris.utils.benchmarking import run_benchmarking
-from iris.utils.analysis import get_components, calc_enrichment
+from ..utils.generate_bitstrings import generate_bitflip, generate_random
+from ..utils.plotting import average_metrics, find_optimal_cutoff, plot_iris_metric, score_predictions, plot_f1
+from ..utils.benchmarking import run_benchmarking
+from ..utils.analysis import get_components, calc_enrichment
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -72,7 +72,7 @@ class IRIS:
             preset_signals: list of preset signals 
             mappings: dictionary of preset signals mapped to response genes
         '''
-        preset_signals = ["RA", "Bmp", "Fgf", "Wnt", "TgfB"] # "HH"
+        preset_signals = ["RA", "Bmp", "Fgf", "Wnt", "TgfB", "Shh"] 
 
         mappings = {}
         mappings["RA"] = ["CYP26A1", "HOXB1", "HNF1B", "CYP26C1", "HOXA1", "HOXB2", "HOXA3", "HOXA2", "HOXB3"]
@@ -80,7 +80,7 @@ class IRIS:
         mappings["Fgf"] = ["SPRY1", "SPRY2", "DUSP6", "SPRY4", "ETV5", "ETV4", "FOS", "SPRY2", "MYC", "JUNB", "DUSP14"]
         mappings["Wnt"] = ["AXIN1", "CCND1", "DKK1", "MYC", "NOTUM", "AXIN2", "SP5", "LEF1"]
         mappings["TgfB"] = ["SMAD7", "TWIST1", "TWIST2"]
-        # mappings["HH"] = ["GLI1", "PTCH1", "HHIP", "FOXF1", "FOXF2"]
+        mappings["Shh"] = ["GLI1", "PTCH1", "HHIP", "FOXF1", "FOXF2"]
 
         for signal in preset_signals:
             genes = mappings[signal]
@@ -354,7 +354,8 @@ class IRIS:
         scvi.model.SCVI.setup_anndata(data, layer="counts", batch_key='batch', categorical_covariate_keys=['celltype'])
         # sets up model with this anndata
         vae = scvi.model.SCVI(data, n_layers=n_layers, n_latent=n_latent, n_hidden=n_hidden, gene_likelihood="zinb")
-        vae.train(max_epochs=epochs, use_gpu=True)
+        vae.train(max_epochs=epochs, use_gpu=True, validation_size=0.1, early_stopping=True)
+        vae.save('vae_'+str(n_layers)+'_'+str(n_latent)+'_'+str(n_hidden)+'_'+str(epochs))
         return vae
         
     def run_model(
@@ -364,8 +365,8 @@ class IRIS:
             test_batches: list[int] = None, 
             n_layers: int = 2, 
             n_latent: int = 30,
-            vae_epochs: int = 100,
-            scanvi_epochs: int = 10
+            vae_epochs: int = 125,
+            scanvi_epochs: int = 5
         ) -> tuple[pd.DataFrame, AnnData]:
         '''
         Creates and runs VAE model contained in IRIS object with given hyperparameters. If 
@@ -392,41 +393,48 @@ class IRIS:
         self.anndata.obs['Clusters'] = "unknown"
 
         # hold out random 20% of all data 
-        if not train_batches or not test_batches:
+        if not train_batches:
             adata_full_gifford = self.anndata
+        elif not test_batches:
+            adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], train_batches)]
             held_out = np.random.choice(adata_full_gifford.obs.index, size=int(len(adata_full_gifford.obs.index)*0.2))
         # hold out batches identified as test set
         else:
             adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], train_batches + test_batches)]
             held_out =  adata_full_gifford.obs.index[np.isin(adata_full_gifford.obs['batch'], test_batches)]
 
-        adata_results = adata_full_gifford[held_out]
-                
+        adata_results = adata_full_gifford[np.isin(adata_full_gifford.obs['batch'], test_batches)]
+        # adata_results = adata_full_gifford[held_out]
+                # TODO: double check held out
         adata_full_gifford.layers['counts'] = adata_full_gifford.X
         adata_full_gifford = adata_full_gifford.copy()
         # obscure cell type information
-        adata_full_gifford.obs['celltype'] = adata_full_gifford.obs['celltype'].cat.add_categories('unknown')
+        if 'unknown' not in adata_full_gifford.obs.loc[held_out, 'celltype'].cat.categories:
+            adata_full_gifford.obs['celltype'] = adata_full_gifford.obs['celltype'].cat.add_categories('unknown')
         adata_full_gifford.obs.loc[held_out, 'celltype'] = 'unknown'
 
         # initialize model
         vae = self.set_scvi_model(adata_full_gifford, n_layers=n_layers, n_latent=n_latent, epochs=vae_epochs)
 
-        df = pd.DataFrame({}, index=adata_full_gifford[held_out].obs.index)
+        df = pd.DataFrame({}, index=adata_results.obs.index)
 
         # obscure true signal values
         class_names = []
         for signal in self.signals:
             class_names.append(signal + '_class')
+            if 'unknown' not in adata_full_gifford.obs[signal + '_class'].cat.categories:
+                adata_full_gifford.obs[signal + '_class'] = adata_full_gifford.obs[signal + '_class'].cat.add_categories('unknown')
+            if sum(adata_full_gifford.obs[signal + '_class'].isna()) != 0:
+                adata_full_gifford.obs[signal + '_class'].fillna("unknown", inplace=True)
             adata_full_gifford.obs.loc[held_out, signal + '_class'] = "unknown"
 
         # predict
         for val in class_names:
             scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=val, unlabeled_category = "unknown")
-            scanvae.train(max_epochs=scanvi_epochs)
-            predictions = scanvae.predict(adata_full_gifford[held_out])
+            scanvae.train(max_epochs=scanvi_epochs, check_val_every_n_epoch=1, plan_kwargs=dict(n_steps_kl_warmup=1600, n_epochs_kl_warmup=None))
+            predictions = scanvae.predict(adata_full_gifford[np.isin(adata_full_gifford.obs['batch'], test_batches)], soft=True)['Stim'].values
             df[val] = predictions
             adata_results.obs[val+'_predictions'] = predictions
-            scanvae.save(val+'_vae='+vae_epochs+'_scanvi='+scanvi_epochs)
 
             self.models[val] = scanvae
         
@@ -497,7 +505,8 @@ class IRIS:
             batches: list[int] = None,
             signals: list[str] = None, 
             metrics: list[str] = None, 
-            plot: bool = True
+            plot: bool = True,
+            plot_resp: bool = False
         ) -> dict[str, dict[str, float]]: 
         '''
         Takes IRIS predictions and returns score of whichever statistics are asked for - 
@@ -512,6 +521,7 @@ class IRIS:
                 if not given, all signals are used
             metrics: list of strings of desired statistics; if not given, all metrics are computed
             plot: whether or not to display AUROC, AUPRC curves (default True)
+            plot_resp: boolean to plot response gene method performance (default False)
 
         Returns:
             scores: dictionary of dictionaries where keys are signals (RA, WNT, etc.) and 
@@ -524,14 +534,19 @@ class IRIS:
 
         if batches:
             adata = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
+            if self.signals[0] + '_resp_zorn' not in adata.obs:
+                self.response_gene(batches)
         else:
             adata = self.anndata
+            batches = self.anndata.obs['batch'].unique().tolist()
+            if self.signals[0] + '_resp_zorn' not in adata.obs:
+                self.response_gene(batches)
 
         final_scores = {}
 
         for metric in metrics:
             scores, iris_x, iris_y, resp_x, resp_y = score_predictions(iris_preds, adata, metric, signals, plot)
-            plot_iris_metric(resp_x, resp_y, iris_x, iris_y, metric, signals)
+            plot_iris_metric(resp_x, resp_y, iris_x, iris_y, metric, signals, plot_resp)
             for signal in signals:
                 final_scores[signal] = {}
                 final_scores[signal][metric] = scores[signal]
@@ -575,7 +590,7 @@ class IRIS:
             adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
         else:
             batches = self.anndata.obs['batch'].unique().tolist()
-            self.response_gene()
+            self.response_gene(batches)
             adata_full_gifford = self.anndata
 
         adata_full_gifford.layers['counts'] = adata_full_gifford.X

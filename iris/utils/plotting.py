@@ -88,7 +88,8 @@ def plot_iris_metric(
         iris_pred_1: list,
         iris_pred_2: list,
         metric: str,
-        signals: list[str]
+        signals: list[str],
+        plot_resp: bool = False
     ) -> None:
     '''
     Plots IRIS predictions vs. response gene method predictions for a given metric. 
@@ -103,15 +104,19 @@ def plot_iris_metric(
         iris_pred_1: list of scores of IRIS predictions to be plotted on x-axis
         iris_pred_2: list of scores of IRIS predictions to be plotted on y-axis
     '''
-    colors = ['#D62728', '#17BECF', '#2CA02C', 'black', '#8C564B']
+    colors = ['#D62728', '#17BECF', '#2CA02C', 'black', '#8C564B', 'orange']
 
     plt.figure()
     for i in range(len(iris_pred_1)):
-        plt.plot(resp_pred_1[i], resp_pred_2[i], color=colors[i], linestyle='dashed', dashes=(5, 5))
+        if plot_resp:
+            plt.plot(resp_pred_1[i], resp_pred_2[i], color=colors[i], linestyle='dashed', dashes=(5, 5))
         plt.plot(iris_pred_1[i], iris_pred_2[i], color=colors[i])
         plt.xlim([1e-6, 1])
         plt.ylim([0, 1])
-    plt.legend(signals + ['IRIS', 'Reponse Genes'])
+    legend = signals 
+    if plot_resp:
+        legend += ['IRIS', 'Response Genes']
+    plt.legend(legend)
 
     if metric == "AUROC":
         x_label = 'False Positive Rate'
@@ -125,6 +130,7 @@ def plot_iris_metric(
     plt.ylabel(y_label)
     plt.xlabel(x_label)
     plt.title(title)
+    plt.savefig(metric+'.png')
 
 def score_predictions(
         iris_preds: DataFrame,
