@@ -1,5 +1,6 @@
 # IRIS-signaling-inference
-code repository for Hutchins et al. "Reconstructing signaling history of single cells via statistical inference" (2025)
+Code repository for Hutchins et al. "Reconstructing signaling history of single cells via statistical inference" (2025). 
+![IRIS figure](fig.png)
 
 ## Overview
 IRIS is a set of algorithms and functionalities that analyze scRNA-seq data. IRIS can make predictions on cell signaling state by leveraging probabilistic models, generate and plot diffusion maps of cell types, and perform a collection of other kinds of analysis on the single-cell data. IRIS relies heavily on [AnnData](https://anndata.readthedocs.io/en/stable/) and [scvi-tools](https://scvi-tools.org/) - it expects data in the form of an AnnData object and uses SCVI and SCANVI models to make predictions. 
