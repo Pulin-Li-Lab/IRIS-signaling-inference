@@ -1,4 +1,5 @@
-# Ignore Python cache files
+# Ignore Python cache files and notebooks
 __pycache__/
 *.pyc
 *.pyo
+*.ipynb
