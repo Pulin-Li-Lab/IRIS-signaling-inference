@@ -434,7 +434,7 @@ class IRIS:
         for val in class_names:
             scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=val, unlabeled_category = "unknown")
             scanvae.train(max_epochs=scanvi_epochs, check_val_every_n_epoch=1, plan_kwargs=dict(n_steps_kl_warmup=1600, n_epochs_kl_warmup=None))
-            predictions = scanvae.predict(adata_full_gifford[np.isin(adata_full_gifford.obs['batch'], test_batches)], soft=True)['Stim'].values
+            predictions = scanvae.predict(adata_full_gifford[held_out], soft=True)['Stim'].values
             df[val] = predictions
             adata_results.obs[val+'_predictions'] = predictions
             scanvae.save('models/'+val+'_vae='+str(vae_epochs)+'_scanvi='+str(scanvi_epochs))

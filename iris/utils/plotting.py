@@ -176,7 +176,7 @@ def score_predictions(
         if metric == "AUROC":
             score = roc_auc_score((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
             if plot:
-                fpr, tpr, _ = roc_curve(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
+                fpr, tpr, _ = roc_curve((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
                 iris_x.append(fpr)
                 iris_y.append(tpr)
 
@@ -184,13 +184,13 @@ def score_predictions(
                 resp_x.append(fpr)
                 resp_y.append(tpr)
         elif metric == "F1":
-            score = f1_score(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
+            score = f1_score((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
             iris_x.append(score)
             score = f1_score((adata.obs[class_name] == "Stim").astype(int), (adata.obs[resp_name].values > threshold).astype(int))
             resp_x.append(score)
 
         elif metric == "AUPRC":
-            precision, recall, _ = precision_recall_curve(adata.obs[class_name], iris_preds[class_name], pos_label='Stim')
+            precision, recall, _ = precision_recall_curve((adata.obs[class_name] == 'Stim').astype(int), iris_preds[class_name])
             score = auc(recall, precision)
             if plot:
                 iris_x.append(recall)
