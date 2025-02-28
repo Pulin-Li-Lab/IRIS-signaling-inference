@@ -753,15 +753,92 @@ class IRIS:
             adata, groupby="leiden", standard_scale="var", n_genes=num_genes
         )
 
+    def generate_screen(
+            self,
+            batches: list[int],
+            parameters: list[list[int]],
+            signal: str,
+            resample_labels: bool = False,
+            vae_epochs: int = 125,
+            scanvi_epochs: int = 5
+        ) -> None:
+        '''
+        Generates SCANVI models with all combinations of given parameters for all 
+        stored signals. Saves models as well as csv of predictions for each signal.
+
+        Args:
+            batches: list of integers of batches to hold out one-by-one
+            parameters: list of list of integers of parameter values
+            signal: string of signal, ex. "RA"
+            metrics: list of strings of metric, ex. ["AUROC"], ["AUROC", "F1"]
+            resample_labels: boolean of whether to randomize training labels, default False
+            vae_epochs: integer epochs to train VAE, default 125
+            scanvi_epochs: integer epochs to train SCANVI, default 5
+        '''
+        hidden, layers, latent = parameters
+
+        adata_full = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
+        adata_full.layers['counts'] = adata_full.X
+
+        for batch in batches:
+            adata_full = adata_full.copy()
+            adata_in = adata_full[~(adata_full.obs['batch'] == batch)]
+            adata_out = adata_full[adata_full.obs['batch'] == batch]
+
+            # obscure signaling truth for held out batch
+            for signal in self.signals:
+                adata_out.obs[signal+'_class'] = 'unknown'
+                adata_out.obs[signal+'_class'] = adata_out.obs[signal+'_class'].astype('category')
+                if resample_labels:
+                    adata_in.obs[signal+'_class'] = np.random.choice(['Stim', 'Ctrl'], len(adata_in))
+
+            orig_celltypes = adata_out.obs['celltype'].cat.categories
+
+            # obscure celltype for held out batch
+            adata_out.obs['celltype'] = 'unknown'
+            adata_out.obs['celltype'] = adata_out.obs['celltype'].astype('category')
+            adata = ad.concat([adata_in, adata_out])
+
+            for signal in self.signals: # make sure no Nans
+                adata.obs[signal+'_class'] = adata.obs[signal+'_class'].fillna("unknown")
+
+            # standardize celltypes
+            missing = [celltype for celltype in orig_celltypes if celltype not in adata.obs['celltype'].cat.categories]
+            if missing:
+                adata.obs['celltype'] = adata.obs['celltype'].cat.add_categories(missing)
+
+            in_batches = list(set(batches) - {batch})
+            # suffix denotes which batches in/out
+            suffix = 'in_'+str(''.join([str(elem) for elem in in_batches]))+'_out_'+str(batch)
+
+            class_name = signal + '_class'
+            outfile_name = 'vae_scanvi_layers_' + str(int(layers)) + '_hidden=' + str(int(hidden)) + '_latent=' + str(int(latent)) + '_' + class_name + '_' + suffix + '_rs.csv'
+            
+            df = pd.DataFrame({}, index=adata.obs.index)
+
+            vae = self.set_scvi_model(adata, layers, latent, hidden, vae_epochs) 
+
+            scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=class_name, unlabeled_category="unknown")
+            scanvae.train(max_epochs=scanvi_epochs, early_stopping=True) 
+            df['Stim_' + class_name + '_scanvi=' + str(scanvi_epochs) + '_vae=' + str(vae_epochs)] = scanvae.predict(soft=True)['Stim']
+        
+            dir_path_a = 'vae_scanvi_layers_' + str(int(layers)) + '_hidden=' + str(int(hidden)) + '_latent=' + str(int(latent)) + '_' + class_name + '_rs/'
+            dir_path = 'Stim_' + class_name + '_scanvi=' + str(scanvi_epochs) + '_vae=' + str(vae_epochs)+'_'
+            final_dir_path = dir_path_a + dir_path + suffix
+        
+            scanvae.save(final_dir_path, overwrite=True) 
+
+            df.to_csv(outfile_name)
+
     def get_hyperparameter_score(
             self, 
-            train_batches: list[int], 
-            test_batches: list[int], 
+            batches: list[int], 
             parameters: list[int], 
             signal: str, 
             metrics: list[str], 
             resample_labels: bool = False,
-            vae_epochs: int = 175,
+            vae_epochs: int = 125,
+            scanvi_epochs: int = 5
         ) -> dict[str, float]:
         '''
         Creates model with given hyperparameters, makes predictions, then scores predictions 
@@ -769,90 +846,69 @@ class IRIS:
         test data. Returns a dictionary of scores for each given metric.
 
         Args:
-            train_batches: list of integers of batches used for training
-            test_batches: list of integers of batches used for testing
+            batches: list of integers of batches to hold out one-by-one
             parameters: list of list of integers of parameter values
             signal: string of signal, ex. "RA"
             metrics: list of strings of metric, ex. ["AUROC"], ["AUROC", "F1"]
             resample_labels: boolean of whether to randomize training labels, default False
+            vae_epochs: integer epochs to train VAE, default 125
+            scanvi_epochs: integer epochs to train SCANVI, default 5
         '''
-        hidden, layers, latent, epochs = parameters
+        hidden, layers, latent = parameters
 
-        all_batches = train_batches + list(set(test_batches) - set(train_batches))
-        adata_full = self.anndata[np.isin(self.anndata.obs['batch'], all_batches)]
+        adata_full = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
         adata_full.layers['counts'] = adata_full.X
-        adata_full = adata_full.copy()
-        adata_in = adata_full[np.isin(adata_full.obs['batch'], train_batches)]
-        adata_out = adata_full[np.isin(adata_full.obs['batch'], test_batches)]
-
-        for signal in self.signals:
-            adata_out.obs[signal+'_class'] = 'unknown'
-            if resample_labels:
-                adata_in.obs[signal+'_class'] = np.random.choice(['Stim', 'Ctrl'], len(adata_in))
-
-        adata_out.obs['celltype'] = 'unknown'
-        adata = ad.concat([adata_in, adata_out])
 
         # original data 
         df_result = adata_full.obs[[signal+'_class' for signal in self.signals]]
 
-        # suffix relates to which batches in/out
-        df = pd.DataFrame({}, index=adata.obs.index)
-        suffix = '_in_'+str(train_batches)+'_out_'+str(test_batches)
-
-        vae = self.set_scvi_model(adata, layers, latent, hidden, vae_epochs) 
-        class_name = signal + '_class'
-        outfile_name = 'vae_scanvi_layers_' + str(int(layers)) + '_hidden=' + str(int(hidden)) + '_latent=' + str(int(latent)) + '_' + class_name + '_' + suffix + '_rs.csv'
-
-        for i in range(3):
-            vae.train(max_epochs=25)
-            scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=class_name, unlabeled_category="unknown")
-            for epoch in range(3):
-                scanvae.train(max_epochs=epochs)
-
-                df['Stim_' + class_name + '_scanvi=' + str(int(epoch)*3) + '_vae=' + str(int(i+7)*25)] = scanvae.predict(soft=True)['Stim']
-            
-                dir_path_a = 'vae_scanvi_layers_' + str(int(layers)) + '_hidden=' + str(int(hidden)) + '_latent=' + str(int(latent)) + '_' + class_name + '_rs/'
-                dir_path = 'Stim_' + class_name + '_scanvi=' + str(int(epoch)*3) + '_vae=' + str(int(i+7)*25)
-                final_dir_path = dir_path_a + dir_path + suffix
-            
-                scanvae.save(final_dir_path, overwrite=True) 
-
-        df.to_csv(outfile_name)
-
-        self.response_gene(all_batches)
+        self.generate_screen(batches, parameters, signal, resample_labels, vae_epochs, scanvi_epochs)
 
         scores = {}
-        df_result_sub = df_result[np.isin(adata_full.obs['batch'], test_batches)] # original values
-        
-        signal_lst = scanvae.predict(soft=True)['Stim'] # predictions
-        signal_lst_sub = signal_lst[np.isin(adata.obs['batch'], test_batches)]
+        score_list = []
+
+        class_name = signal + '_class'
+        fileprefix = 'vae_scanvi_layers_' + str(layers) + '_hidden=' + str(hidden) + '_latent=' + str(latent) + '_' + class_name + '_rs/'
 
         for metric in metrics:
-            if metric == "AUROC":
-                score = skm.roc_auc_score(((df_result_sub[class_name]) == 'Stim').astype(int), signal_lst_sub)
-            elif metric == "F1":
-                score = skm.f1_score((df_result_sub[class_name] == "Stim").astype(int), signal_lst_sub)
-            elif metric == "AUPRC":
-                precision, recall, _ = skm.precision_recall_curve(((df_result_sub[class_name]) == 'Stim').astype(int), signal_lst_sub)
-                score = skm.auc(recall, precision)
-            else:
-                print(f"Metric {metric} is not supported")
-                break
+            for batch in batches:
+                in_batches = list(set(batches) - {batch})
+                # suffix specifies which batches in/out
+                suffix = 'in_'+str(''.join([str(elem) for elem in in_batches]))+'_out_'+str(batch)
+                df_result_sub = df_result[adata_full.obs['batch'] == batch] # original values
+
+                scanvae = scvi.model.SCANVI.load(fileprefix + 'Stim_' + signal + '_class_scanvi=' + str(scanvi_epochs) + '_vae=' + str(vae_epochs)+'_' + suffix, adata=adata_full)
+                
+                signal_lst = scanvae.predict(soft=True)['Stim'] # predictions
+                signal_lst_sub = signal_lst[adata_full.obs['batch'] == batch]
+
+                if metric == "AUROC":
+                    score = skm.roc_auc_score(((df_result_sub[class_name]) == 'Stim').astype(int), signal_lst_sub)
+                elif metric == "F1":
+                    score = skm.f1_score((df_result_sub[class_name] == "Stim").astype(int), signal_lst_sub)
+                elif metric == "AUPRC":
+                    precision, recall, _ = skm.precision_recall_curve(((df_result_sub[class_name]) == 'Stim').astype(int), signal_lst_sub)
+                    score = skm.auc(recall, precision)
+                else:
+                    print(f"Metric {metric} is not supported")
+                    break
+
+                score_list.append(score)
 
             if metric not in scores:
-                scores[metric] = [score]
+                scores[metric] = score_list
 
         return scores
 
     def select_hyperparameters(
             self, 
-            train_batches: list[int], 
-            test_batches: list[int], 
+            batches: list[int],
             parameters: list[list[int]], 
             signal: str, 
             metrics: list[str], 
-            resample_labels: bool = False
+            resample_labels: bool = False,
+            vae_epochs: int = 125,
+            scanvi_epochs: int = 5
         ) -> tuple[dict[str, list[int]], dict[str, NDArray[np.float64]]]:
         '''
         Samples the best combination of hyperparameters based on given parameter values. 
@@ -860,15 +916,22 @@ class IRIS:
         combination and scores for each hyperparameter combination in numpy array. 
 
         Args:
-            train_batches: list of integers of batches used for training
-            test_batches: list of integers of batches used for testing
+            batches: list of integers of batches to hold out one-by-one
             parameters: list of list of integers of parameter values
             signal: string of signal, ex. "RA"
-            metric: list of strings of metrics, ex. ["AUROC"]
+            metrics: list of strings of metrics, ex. ["AUROC"]
             resample_labels: boolean of whether to randomize training labels, default False
+            vae_epochs: integer epochs to train VAE, default 125
+            scanvi_epochs: integer epochs to train SCANVI, default 5
+
+        Returns:
+            best_params: dictionary of signal to list of best parameters 
+                per signal per metric
+            final_scores: dictionary of metric to 
+
         '''
-        hidden, num_layers, latent_dim, epochs = parameters
-        final_scores = {metric: np.zeros((len(hidden), len(num_layers), len(latent_dim), len(epochs))) for metric in metrics}
+        hidden, num_layers, latent_dim = parameters
+        final_scores = {metric: np.zeros((len(hidden), len(num_layers), len(latent_dim))) for metric in metrics}
 
         best_scores = {metric: 0 for metric in metrics}
         best_params = {metric: None for metric in metrics}
@@ -879,17 +942,14 @@ class IRIS:
             for nlayers in num_layers:
                 k = 0
                 for nlat in latent_dim: 
-                    l = 0
-                    for nepoch in epochs:
-                        params = [hnode, nlayers, nlat, nepoch]
-                        scores = self.get_hyperparameter_score(train_batches, test_batches, params, signal, metrics, resample_labels)
-                        for metric in metrics:
-                            score = scores[metric]
-                            if score > best_scores[metric]:
-                                best_scores[metric] = score
-                                best_params[metric] = parameters
-                            final_scores[metric][i,j,k,l] = score
-                        l += 1
+                    params = [hnode, nlayers, nlat]
+                    scores = self.get_hyperparameter_score(batches, params, signal, metrics, resample_labels, vae_epochs, scanvi_epochs)
+                    for metric in metrics:
+                        score = np.mean(scores[metric])
+                        if score > best_scores[metric]:
+                            best_scores[metric] = score
+                            best_params[metric] = parameters
+                        final_scores[metric][i,j,k] = score
                     k += 1
                 j += 1
             i += 1
