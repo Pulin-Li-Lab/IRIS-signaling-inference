@@ -1,5 +1,5 @@
 # IRIS-signaling-inference
-Code repository for Hutchins et al. "Reconstructing signaling history of single cells via statistical inference" (2025). 
+Code repository for Hutchins et al. (2025) "Reconstructing signaling history of single cells via statistical inference". 
 
 ![IRIS figure](fig.png)
 
