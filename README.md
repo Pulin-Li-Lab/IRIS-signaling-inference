@@ -68,4 +68,4 @@ The example notebook [fig3+4.ipynb](https://github.com/Pulin-Li-Lab/IRIS-signali
 The IRIS class contains the necessary functions to re-create every figure in the paper, arranged roughly chronologically.
 
 ## Data
-A new single-cell dataset is included in [data/](https://github.com/Pulin-Li-Lab/IRIS-signaling-inference/tree/main/data). The dataset will also eventually be publicly available as a [NIH GEO dataset](https://www.ncbi.nlm.nih.gov/gds/?term=GSE289836). 
+An h5ad data file can be made from this dataset: [GSE122009](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE122009), and used in IRIS. A new single-cell dataset from this paper will also eventually be publicly available as a [NIH GEO dataset](https://www.ncbi.nlm.nih.gov/gds/?term=GSE289836). 
