@@ -333,28 +333,33 @@ class IRIS:
     
     def load_pretrained_model(
             self,
-            paths: list[str]
+            paths: list[str],
+            signals: list[str] = None
         ) -> None:
         '''
-        Load in pretrained models to IRIS object to be stored as models for use.
-        Paths should be list of strings of paths to models. If you want to use 
-        the same model for all signals, paths can be a length-1 list. If you 
-        want to use different models for each signal, there should be the same 
-        number of strings in paths as the number of pathways you want to predict.
-        You must make sure that the original models were set up on data that is 
-        compatible with the data stored in IRIS.anndata (same columns, genes, etc.).
-        If you get an error from this function, you should try combining the data 
-        and setting that combined data to be your IRIS.anndata.
+        Load in pretrained models to IRIS object to be stored as models for each 
+        signal specified in signals. Paths should be list of strings of paths to 
+        models. If you want to use the same model for all signals, paths can be 
+        a length-1 list. If you want to use different models for each signal, 
+        there should be the same number of strings in paths as the number of 
+        pathways you want to predict. You must make sure that the original models 
+        were set up on data that is compatible with the data stored in IRIS.anndata 
+        (same columns, genes, etc.). If you get an error from this function, you 
+        should try combining the data and setting that combined data to be your IRIS.anndata.
 
         Args:
-            paths:
+            paths: list of strings to model paths
+            signals: list of signals to set these models for
         '''
+        if not signals:
+            signals = self.signals
+
         if len(paths) == 1:
-            for signal in self.signals:
+            for signal in signals:
                 self.models[signal] = scvi.model.SCANVI.load(paths[0], self.anndata)
         else:
             for i in range(len(paths)):
-                self.models[self.signals[i]] = scvi.model.SCANVI.load(paths[i], self.anndata)
+                self.models[signals[i]] = scvi.model.SCANVI.load(paths[i], self.anndata)
 
     
     def set_scvi_model(

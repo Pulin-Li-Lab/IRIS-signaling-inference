@@ -63,6 +63,9 @@ iris_obj.response_gene() # for example
 ```
 IRIS objects expect the obs of their corresponding Anndata objects to have a ground truth column for each pathway to be predicted, as well as columns 'celltype' and 'batch'. You can run `iris_obj.validate_adata(classes)` to check whether the Anndata has what IRIS expects, passing in a list of your ground truth column names (ex. ['RA_class',...]) for `classes`.
 
+### Models
+IRIS can both load in pretrained models and train models from scratch. Any time you want to load in a model for analysis, run `iris_obj.load_pretrained_model(paths, signals)` with the paths to the models you want to use for those particular signals. Otherwise, if you never run `load_pretrained_model` or set `iris_obj.models` to be empty, IRIS will create and train new models from scratch.
+
 ## Example
 The example notebook [fig3+4.ipynb](https://github.com/Pulin-Li-Lab/IRIS-signaling-inference/blob/main/iris/examples/fig3%2B4.ipynb) uses IRIS to generate some of the plots used in Figures 3 and 4 in the paper, like panel C in the summary figure above. With a GPU, the notebook took about 10 minutes in total to run. Without a GPU, it may take around an hour on a standard computer. 
 
