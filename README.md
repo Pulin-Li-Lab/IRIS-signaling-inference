@@ -61,8 +61,7 @@ Then, you can create IRIS objects and use their functions!
 iris_obj = IRIS('test', anndata = data) # set anndata = your own data
 iris_obj.response_gene() # for example
 ```
-IRIS objects expect the obs of their corresponding Anndata objects to have a column for each pathway to be predicted, as well as columns 'celltype' and 'batch'. You can run 
-`iris_obj.validate_adata(classes)` to check whether the Anndata has what IRIS expects, passing in a list of your ground truth column names (ex. ['RA_class',...]) for `classes`.
+IRIS objects expect the obs of their corresponding Anndata objects to have a ground truth column for each pathway to be predicted, as well as columns 'celltype' and 'batch'. You can run `iris_obj.validate_adata(classes)` to check whether the Anndata has what IRIS expects, passing in a list of your ground truth column names (ex. ['RA_class',...]) for `classes`.
 
 ## Example
 The example notebook [fig3+4.ipynb](https://github.com/Pulin-Li-Lab/IRIS-signaling-inference/blob/main/iris/examples/fig3%2B4.ipynb) uses IRIS to generate some of the plots used in Figures 3 and 4 in the paper, like panel C in the summary figure above. With a GPU, the notebook took about 10 minutes in total to run. Without a GPU, it may take around an hour on a standard computer. 
