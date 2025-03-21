@@ -331,6 +331,32 @@ class IRIS:
 
         return best_dc, diff_components
     
+    def load_pretrained_model(
+            self,
+            paths: list[str]
+        ) -> None:
+        '''
+        Load in pretrained models to IRIS object to be stored as models for use.
+        Paths should be list of strings of paths to models. If you want to use 
+        the same model for all signals, paths can be a length-1 list. If you 
+        want to use different models for each signal, there should be the same 
+        number of strings in paths as the number of pathways you want to predict.
+        You must make sure that the original models were set up on data that is 
+        compatible with the data stored in IRIS.anndata (same columns, genes, etc.).
+        If you get an error from this function, you should try combining the data 
+        and setting that combined data to be your IRIS.anndata.
+
+        Args:
+            paths:
+        '''
+        if len(paths) == 1:
+            for signal in self.signals:
+                self.models[signal] = scvi.model.SCANVI.load(paths[0], self.anndata)
+        else:
+            for i in range(len(paths)):
+                self.models[self.signals[i]] = scvi.model.SCANVI.load(paths[i], self.anndata)
+
+    
     def set_scvi_model(
             self, 
             data: AnnData, 
@@ -382,13 +408,16 @@ class IRIS:
             scanvi_epochs: int = 5
         ) -> tuple[pd.DataFrame, AnnData]:
         '''
-        Creates and runs VAE model contained in IRIS object with given hyperparameters. If 
-        explicit train/test batches are given, obscures celltype information from test batches 
-        and uses all of the train_batches to train. If explicit batches are not given, runs 
-        with random 80/20 train/test split across all batches and conditions. Stores final 
-        trained models for each signal into models attribute of the IRIS object (IRIS.models). 
-        Saves model predictions dataframe into csv file at outpath. Returns pandas dataframe 
-        of predictions and AnnData object representing test set with predictions as a column.
+        Runs model with given hyperparameters and makes predictions on each signaling pathway. 
+        If no VAE models stored in IRIS object, creates model with given hyperparameters, runs, 
+        and stores model into IRIS object. Otherwise, loads in models stored in IRIS object and 
+        runs the models to make predictions. If explicit train/test batches are given, obscures 
+        celltype information from test batches and uses all of the train_batches to train. If 
+        explicit batches are not given, runs with random 80/20 train/test split across all 
+        batches and conditions. Stores final trained models for each signal into models attribute 
+        of the IRIS object (IRIS.models). Saves model predictions dataframe into csv file at 
+        outpath. Returns pandas dataframe of predictions and AnnData object representing test 
+        set with predictions as a column.
         
         Args:
             out_path: string of filename to save csv of predictions to
@@ -424,10 +453,11 @@ class IRIS:
             adata.obs['celltype'] = adata.obs['celltype'].cat.add_categories('unknown')
         adata.obs.loc[held_out, 'celltype'] = 'unknown'
 
-        # initialize model
-        vae = self.set_scvi_model(adata, n_layers=n_layers, n_latent=n_latent, n_hidden=n_hidden, epochs=vae_epochs, outdir=outdir)
-
         df = pd.DataFrame({}, index=adata_results.obs.index)
+
+        if not self.models:
+            # initialize model
+            vae = self.set_scvi_model(adata, n_layers=n_layers, n_latent=n_latent, n_hidden=n_hidden, epochs=vae_epochs, outdir=outdir)
 
         # obscure true signal values
         class_names = []
@@ -441,16 +471,18 @@ class IRIS:
 
         # predict
         for val in class_names:
-            scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=val, unlabeled_category = "unknown")
-            scanvae.train(max_epochs=scanvi_epochs, check_val_every_n_epoch=1, plan_kwargs=dict(n_steps_kl_warmup=1600, n_epochs_kl_warmup=None))
+            if not self.models:
+                scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=val, unlabeled_category = "unknown")
+                scanvae.train(max_epochs=scanvi_epochs, check_val_every_n_epoch=1, plan_kwargs=dict(n_steps_kl_warmup=1600, n_epochs_kl_warmup=None))
+                self.models[val] = scanvae
+            else:
+                scanvae = self.models[val]
             predictions = scanvae.predict(adata[held_out], soft=True)['Stim'].values
             df[val] = predictions
             adata_results.obs[val+'_predictions'] = predictions
             specific = val+'_vae='+str(vae_epochs)+'_scanvi='+str(scanvi_epochs)
-            model_path = outdir+'/'+specific if outdir else 'models/'+specific
-            scanvae.save(model_path)
-
-            self.models[val] = scanvae
+            model_save_path = outdir+'/'+specific if outdir else 'models/'+specific
+            scanvae.save(model_save_path)
         
         df.to_csv(out_path)
 
@@ -503,7 +535,7 @@ class IRIS:
         '''
         if 'celltype' not in self.anndata.obs or 'batch' not in self.anndata.obs:
             print("IRIS object's AnnData must have celltype and batch columns in the obs")
-            
+
         for c in classes:
             try:
                 vals = self.anndata.obs[c]
@@ -582,6 +614,8 @@ class IRIS:
             plot_each_condition: bool = False
         ) -> tuple[list[float], list[float]]:
         '''
+        If no VAE models stored in IRIS object, creates model and runs. Otherwise, 
+        loads in models stored in IRIS object and runs with different conditions held out.
         Runs the model excluding the given condition (ex.'BMP+TGFB+FGF-WNT+RA-') and 
         returns F1 score. Can also hold out condition across certain groupings of a 
         given category (cell type, batch, etc.). Saves final trained models for each 
@@ -662,17 +696,21 @@ class IRIS:
                 out_index = (adata_cat_out.obs.index)
                 df = pd.DataFrame({}, index=adata_full_giff2.obs.index)
 
-                # initialize VAE
-                vae = self.set_scvi_model(adata_full_giff2, epochs=25, suffix='held_out_'+str(count))
+                if not self.models:
+                    # initialize VAE
+                    vae = self.set_scvi_model(adata_full_giff2, epochs=125, suffix='held_out_'+str(count))
 
                 i = 0
                 for classification in class_names:
                     if len(results[:, i]) == 0:
                         continue
-                    # train SCANVI model
-                    scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=classification, unlabeled_category = "unknown")
-                    scanvae.train(max_epochs=5, batch_size=512)
-                    self.models[classification] = scanvae
+                    if not self.models:
+                        # train SCANVI model
+                        scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=classification, unlabeled_category = "unknown")
+                        scanvae.train(max_epochs=5, batch_size=512)
+                        self.models[classification] = scanvae
+                    else:
+                        scanvae = self.models[classification]
                     scanvae.save('models/'+classification+'_held_out_'+combo+'_'+str(count))
                     # make predictions
                     df[classification] = scanvae.predict()
@@ -1108,7 +1146,10 @@ class IRIS:
         ) -> None:
         '''
         Performs cross validation holding out a list of batches and estimates given 
-        performance metric (either AUROC or AUPRC). Uses all of train_batches for model 
+        performance metric (either AUROC or AUPRC). If no VAE models stored in IRIS 
+        object, creates model with specified epochs, runs, and stores model back 
+        into object. Otherwise, loads in models stored in IRIS object and performs 
+        cross validation with the stored models. Uses all of train_batches for model 
         training, cycles through the batches in validation_batches, holding out one at a time 
         and using the others for training. Plots AUROC and/or AUPRC scores for each signal. 
         Stores trained models for each signal in IRIS object's self.models.
@@ -1145,16 +1186,19 @@ class IRIS:
             adata_full_giff2 = ad.concat([adata_in, adata_out])
             out_index = (adata_out.obs.index)
 
-            vae = self.set_scvi_model(adata_full_giff2, epochs=vae_epochs)
+            if not self.models:
+                vae = self.set_scvi_model(adata_full_giff2, epochs=vae_epochs)
             
             df = pd.DataFrame({}, index=adata_full_giff2.obs.index)
             
             i = 0
             for classification in class_names:
-
-                scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=classification, unlabeled_category = "unknown")
-                scanvae.train(max_epochs=scanvae_epochs, batch_size=512)
-                self.models[classification] = scanvae
+                if not self.models:
+                    scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=classification, unlabeled_category = "unknown")
+                    scanvae.train(max_epochs=scanvae_epochs, batch_size=512)
+                    self.models[classification] = scanvae
+                else:
+                    scanvae = self.models[classification]
             
                 df[classification] = scanvae.predict(soft=True)['Stim'].values
                 out_results = df[np.isin(adata_full_giff2.obs.index, out_index)]
