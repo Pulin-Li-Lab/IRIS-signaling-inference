@@ -2,7 +2,7 @@
 
 import matplotlib.pyplot as plt
 
-from numpy import arange
+from numpy import arange, mean
 from pandas import DataFrame, Series
 from sklearn.metrics import roc_curve, precision_recall_curve, auc, f1_score, roc_auc_score
 
@@ -10,9 +10,7 @@ def average_metrics(
         iris_x: list, 
         iris_y: list, 
         resp_x: list, 
-        resp_y: list, 
-        n: int, 
-        m: int
+        resp_y: list
     ) -> tuple[list, list, list, list]:
     '''
     Helper function that averages scores for IRIS and response gene method
@@ -23,41 +21,20 @@ def average_metrics(
         iris_y: list of y-component of iris predictions (ex. precision)
         resp_x: list of x-component of response gene method predictions
         resp_y: list of y-component of response gene method predictions
-        n: integer number of signals
-        m: integer number of batches averaged over
 
     Returns:
-        avgd_iris_x:
-        avgd_iris_y:
-        avgd_resp_x:
-        avgd_resp_y:
+        avgd_iris_x: mean of x-component of iris predictions over all batches
+        avgd_iris_y: mean of y-component of iris predictions over all batches
+        avgd_resp_x: mean of x-component of response gene method predictions 
+            over all batches
+        avgd_resp_y: mean of x-component of response gene method predictions 
+            over all batches
     '''
-    avgd_iris_y = []
-    avgd_iris_x = []
-    avgd_resp_y = []
-    avgd_resp_x = []
+    avgd_iris_y = mean(iris_x, axis=0)
+    avgd_iris_x = mean(iris_y, axis=0)
+    avgd_resp_y = mean(resp_x, axis=0)
+    avgd_resp_x = mean(resp_y, axis=0)
 
-    for i in range(n):
-        total_y = 0
-        total_x = 0
-        for j in range(m):
-            total_y += iris_y[j * n + i]
-            total_x += iris_x[j * n + i]
-        total_y /= m
-        total_x /= m 
-        avgd_iris_y.append(total_y)
-        avgd_iris_x.append(total_x)
-
-        total_y = 0
-        total_x = 0
-        for j in range(m):
-            total_y += resp_y[j * n + i]
-            total_x += resp_x[j * n + i]
-        total_y /= m
-        total_x /= m 
-        avgd_resp_y.append(total_y)
-        avgd_resp_x.append(total_x)
-    
     return avgd_iris_x, avgd_iris_y, avgd_resp_x, avgd_resp_y
 
 def find_optimal_cutoff(
@@ -124,7 +101,7 @@ def plot_iris_metric(
     if metric == "AUROC":
         x_label = 'False Positive Rate'
         y_label = 'True Positive Rate'
-        title = 'AUROC Signaling Regressed Prediction'
+        title = 'AUROC Signaling Prediction'
     elif metric == "AUPRC":
         x_label = 'Recall'
         y_label = 'Precision'

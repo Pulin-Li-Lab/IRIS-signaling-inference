@@ -180,14 +180,14 @@ class IRIS:
         Args:
             batches: list of numbers of which batches to calculate response gene score with
         '''
-        adata_gifford = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
-        sc.pp.normalize_total(adata_gifford, target_sum=1e4)
-        sc.pp.log1p(adata_gifford)
+        adata = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
+        sc.pp.normalize_total(adata, target_sum=1e4)
+        sc.pp.log1p(adata)
 
         for signal in self.signals:
             name = signal + '_resp_zorn'
-            resp_lst = [gene for gene in self.pathways[signal] if gene in adata_gifford.var.index]
-            mat = adata_gifford[:, resp_lst].X.todense()
+            resp_lst = [gene for gene in self.pathways[signal] if gene in adata.var.index]
+            mat = adata[:, resp_lst].X.todense()
             mat[np.isnan(mat)] = 0
 
             # assuming mat columns are in same order as resp_lst
@@ -202,9 +202,9 @@ class IRIS:
             lst = []
             for val in np.array(mat.sum(axis=1)):
                 lst.append(val[0])
-            adata_gifford.obs[name] = lst
-            adata_gifford.obs[name] /= adata_gifford.obs[name].max()
-            self.anndata.obs[name] = adata_gifford.obs[name]
+            adata.obs[name] = lst
+            adata.obs[name] /= adata.obs[name].max()
+            self.anndata.obs[name] = adata.obs[name]
     
     def generate_diffusion(
             self, 
@@ -338,7 +338,8 @@ class IRIS:
             n_latent: int = 30, 
             n_hidden: int = 128, 
             epochs: int = 10,
-            suffix: str = None
+            suffix: str = None,
+            outdir: str = None
         ) -> VAE:
         '''
         Initializes SCVI model to use for IRIS analysis, returns model.
@@ -349,6 +350,9 @@ class IRIS:
             n_latent: dimensionality of latent space (default 30)
             n_hidden: number of hidden nodes (default 128)
             epochs: maximum epochs to train SCVI model (default 10)
+            suffix: string to add to end of model name (ex. test batches)
+            outdir: name of directory to save models to; by default makes 
+                a new directory in your folder named "models/"
 
         Returns:
             vae: SCVI model with given params set up on given data
@@ -361,16 +365,19 @@ class IRIS:
         name = str(n_layers)+'_'+str(n_latent)+'_'+str(n_hidden)+'_'+str(epochs)+'_'
         if suffix:
             name += str(suffix)
-        vae.save('models/' + name)
+        path = outdir + '/' if outdir else 'models'
+        vae.save(path + name)
         return vae
         
     def run_model(
             self, 
             out_path: str, 
+            outdir: str = None,
             train_batches: list[int] = None, 
             test_batches: list[int] = None, 
             n_layers: int = 2, 
             n_latent: int = 30,
+            n_hidden: int = 128,
             vae_epochs: int = 400,
             scanvi_epochs: int = 5
         ) -> tuple[pd.DataFrame, AnnData]:
@@ -384,13 +391,15 @@ class IRIS:
         of predictions and AnnData object representing test set with predictions as a column.
         
         Args:
-            out_path: string of filename to write results to
+            out_path: string of filename to save csv of predictions to
+            outdir: string of directory to save models to; by default makes a new directory 
+                in your folder named "models/"
             train_batches: list of integers of batches to obscure while training 
             test_batches: list of integers of batches to keep labels for
             n_layers: number of hidden layers, default 2
             n_latent: dimensionality of latent space, default 30
-            vae_epochs: integer number of epochs to train VAE, default 100
-            scanvi_epochs: integer number of epochs to train SCANVI used to predict, default 10
+            vae_epochs: integer number of epochs to train VAE, default 400
+            scanvi_epochs: integer number of epochs to train SCANVI used to predict, default 5
 
         Returns:
             df: pandas DataFrame of prediction of presence of each signal (0 to 1)
@@ -400,23 +409,23 @@ class IRIS:
 
         # hold out random 20% of all data 
         if not train_batches and not test_batches:
-            adata_full_gifford = self.anndata
-            held_out = np.random.choice(adata_full_gifford.obs.index, size=int(len(adata_full_gifford.obs.index)*0.2))
+            adata = self.anndata
+            held_out = np.random.choice(adata.obs.index, size=int(len(adata.obs.index)*0.2))
         # hold out batches identified as test set
         else:
-            adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], train_batches + test_batches)]
-            held_out =  adata_full_gifford.obs.index[np.isin(adata_full_gifford.obs['batch'], test_batches)]
+            adata = self.anndata[np.isin(self.anndata.obs['batch'], train_batches + test_batches)]
+            held_out =  adata.obs.index[np.isin(adata.obs['batch'], test_batches)]
 
-        adata_results = adata_full_gifford[held_out]
-        adata_full_gifford.layers['counts'] = adata_full_gifford.X
-        adata_full_gifford = adata_full_gifford.copy()
+        adata_results = adata[held_out]
+        adata.layers['counts'] = adata.X
+        adata = adata.copy()
         # obscure cell type information
-        if 'unknown' not in adata_full_gifford.obs.loc[held_out, 'celltype'].cat.categories:
-            adata_full_gifford.obs['celltype'] = adata_full_gifford.obs['celltype'].cat.add_categories('unknown')
-        adata_full_gifford.obs.loc[held_out, 'celltype'] = 'unknown'
+        if 'unknown' not in adata.obs.loc[held_out, 'celltype'].cat.categories:
+            adata.obs['celltype'] = adata.obs['celltype'].cat.add_categories('unknown')
+        adata.obs.loc[held_out, 'celltype'] = 'unknown'
 
         # initialize model
-        vae = self.set_scvi_model(adata_full_gifford, n_layers=n_layers, n_latent=n_latent, epochs=vae_epochs)
+        vae = self.set_scvi_model(adata, n_layers=n_layers, n_latent=n_latent, n_hidden=n_hidden, epochs=vae_epochs, outdir=outdir)
 
         df = pd.DataFrame({}, index=adata_results.obs.index)
 
@@ -424,20 +433,22 @@ class IRIS:
         class_names = []
         for signal in self.signals:
             class_names.append(signal + '_class')
-            if 'unknown' not in adata_full_gifford.obs[signal + '_class'].cat.categories:
-                adata_full_gifford.obs[signal + '_class'] = adata_full_gifford.obs[signal + '_class'].cat.add_categories('unknown')
-            if sum(adata_full_gifford.obs[signal + '_class'].isna()) != 0:
-                adata_full_gifford.obs[signal + '_class'].fillna("unknown", inplace=True)
-            adata_full_gifford.obs.loc[held_out, signal + '_class'] = "unknown"
+            if 'unknown' not in adata.obs[signal + '_class'].cat.categories:
+                adata.obs[signal + '_class'] = adata.obs[signal + '_class'].cat.add_categories('unknown')
+            if sum(adata.obs[signal + '_class'].isna()) != 0:
+                adata.obs[signal + '_class'].fillna("unknown", inplace=True)
+            adata.obs.loc[held_out, signal + '_class'] = "unknown"
 
         # predict
         for val in class_names:
             scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=val, unlabeled_category = "unknown")
             scanvae.train(max_epochs=scanvi_epochs, check_val_every_n_epoch=1, plan_kwargs=dict(n_steps_kl_warmup=1600, n_epochs_kl_warmup=None))
-            predictions = scanvae.predict(adata_full_gifford[held_out], soft=True)['Stim'].values
+            predictions = scanvae.predict(adata[held_out], soft=True)['Stim'].values
             df[val] = predictions
             adata_results.obs[val+'_predictions'] = predictions
-            scanvae.save('models/'+val+'_vae='+str(vae_epochs)+'_scanvi='+str(scanvi_epochs))
+            specific = val+'_vae='+str(vae_epochs)+'_scanvi='+str(scanvi_epochs)
+            model_path = outdir+'/'+specific if outdir else 'models/'+specific
+            scanvae.save(model_path)
 
             self.models[val] = scanvae
         
@@ -490,6 +501,9 @@ class IRIS:
         Returns: 
             result: True if adata is in correct form, False if adata is not
         '''
+        if 'celltype' not in self.anndata.obs or 'batch' not in self.anndata.obs:
+            print("IRIS object's AnnData must have celltype and batch columns in the obs")
+            
         for c in classes:
             try:
                 vals = self.anndata.obs[c]
@@ -593,14 +607,14 @@ class IRIS:
         
         if batches:
             self.response_gene(batches)
-            adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
+            adata = self.anndata[np.isin(self.anndata.obs['batch'], batches)]
         else:
             batches = self.anndata.obs['batch'].unique().tolist()
             self.response_gene(batches)
-            adata_full_gifford = self.anndata
+            adata = self.anndata
 
-        adata_full_gifford.layers['counts'] = adata_full_gifford.X
-        adata_full_gifford = adata_full_gifford.copy()
+        adata.layers['counts'] = adata.X
+        adata = adata.copy()
 
         class_names = []
         for signal in self.signals:
@@ -608,13 +622,13 @@ class IRIS:
         
         # create codes for each entry
         code_lst = []
-        for val in range(len(adata_full_gifford.obs)):
-            code_lst.append(self.conv_stim_to_code(adata_full_gifford.obs.iloc[val]))
-        adata_full_gifford.obs['code'] = code_lst
+        for val in range(len(adata.obs)):
+            code_lst.append(self.conv_stim_to_code(adata.obs.iloc[val]))
+        adata.obs['code'] = code_lst
             
         # generate combinations to test
         if not condition:
-            combos = adata_full_gifford.obs['code'].value_counts().index
+            combos = adata.obs['code'].value_counts().index
         else:
             combos = [condition]
 
@@ -631,10 +645,10 @@ class IRIS:
                 count += 1
                 # process data based on category, groupings, combos
                 if category:
-                    adata_non_cat = adata_full_gifford[~np.isin(adata_full_gifford.obs[category], grouping)]
-                    adata_cat = adata_full_gifford[np.isin(adata_full_gifford.obs[category], grouping)]
+                    adata_non_cat = adata[~np.isin(adata.obs[category], grouping)]
+                    adata_cat = adata[np.isin(adata.obs[category], grouping)]
                 else:
-                    adata_cat = adata_full_gifford
+                    adata_cat = adata
         
                 adata_cat_out = adata_cat[np.isin(adata_cat.obs['code'], combo)]
                 adata_cat_in = adata_cat[~np.isin(adata_cat.obs['code'], combo)]
@@ -1088,7 +1102,9 @@ class IRIS:
             self, 
             train_batches: list[int], 
             validation_batches: list[int], 
-            metric: str
+            metric: str,
+            vae_epochs: int = 125,
+            scanvae_epochs: int = 5
         ) -> None:
         '''
         Performs cross validation holding out a list of batches and estimates given 
@@ -1101,15 +1117,17 @@ class IRIS:
             train_batches: list of integers of batches to always use for training
             validation_batches: list of integers of batches to cycle through for cross validation
             metric: "AUROC" or "AUPRC"
+            vae_epochs: integer epochs to train VAE, default 125
+            scanvi_epochs: integer epochs to train SCANVI, default 5
         '''
         self.anndata.obs['Clusters'] = "unknown"
         all_batches = train_batches + list(set(validation_batches) - set(train_batches))
         self.response_gene(all_batches)
 
-        adata_full_gifford = self.anndata[np.isin(self.anndata.obs['batch'], all_batches)]
+        adata = self.anndata[np.isin(self.anndata.obs['batch'], all_batches)]
 
-        adata_full_gifford.layers['counts'] = adata_full_gifford.X
-        adata_full_gifford = adata_full_gifford.copy()
+        adata.layers['counts'] = adata.X
+        adata = adata.copy()
 
         class_names = []
         for signal in self.signals:
@@ -1118,8 +1136,8 @@ class IRIS:
         iris_x, iris_y, resp_x, resp_y = [], [], [], []
 
         for batch in validation_batches:
-            adata_in = adata_full_gifford[~np.isin(adata_full_gifford.obs['batch'], batch)]
-            adata_out = adata_full_gifford[np.isin(adata_full_gifford.obs['batch'], batch)]
+            adata_in = adata[~np.isin(adata.obs['batch'], batch)]
+            adata_out = adata[np.isin(adata.obs['batch'], batch)]
             
             truth = adata_out.obs[class_names].values
             adata_out.obs[class_names] = 'unknown'
@@ -1127,7 +1145,7 @@ class IRIS:
             adata_full_giff2 = ad.concat([adata_in, adata_out])
             out_index = (adata_out.obs.index)
 
-            vae = self.set_scvi_model(adata_full_giff2, epochs=25)
+            vae = self.set_scvi_model(adata_full_giff2, epochs=vae_epochs)
             
             df = pd.DataFrame({}, index=adata_full_giff2.obs.index)
             
@@ -1135,14 +1153,14 @@ class IRIS:
             for classification in class_names:
 
                 scanvae = scvi.model.SCANVI.from_scvi_model(vae, labels_key=classification, unlabeled_category = "unknown")
-                scanvae.train(max_epochs=5, batch_size=512)
+                scanvae.train(max_epochs=scanvae_epochs, batch_size=512)
                 self.models[classification] = scanvae
             
                 df[classification] = scanvae.predict(soft=True)['Stim'].values
                 out_results = df[np.isin(adata_full_giff2.obs.index, out_index)]
                 name = classification.split('_')[0] + '_resp_zorn'
 
-                threshold = find_optimal_cutoff((adata_full_gifford.obs[classification] == "Stim").values.astype(int), adata_full_gifford.obs[name])
+                threshold = find_optimal_cutoff((adata.obs[classification] == "Stim").values.astype(int), adata.obs[name])
 
                 if metric == "AUROC":
                     fpr, tpr, _ = skm.roc_curve(truth[:, i], out_results[classification], pos_label='Stim')
@@ -1166,10 +1184,7 @@ class IRIS:
                     
                 i += 1
 
-        n = len(self.signals)
-        m = len(validation_batches)
-
-        avgd_iris_x, avgd_iris_y, avgd_resp_x, avgd_resp_y = average_metrics(iris_x, iris_y, resp_x, resp_y, n, m)
+        avgd_iris_x, avgd_iris_y, avgd_resp_x, avgd_resp_y = average_metrics(iris_x, iris_y, resp_x, resp_y)
         plot_iris_metric(avgd_resp_x, avgd_resp_y, avgd_iris_x, avgd_iris_y, metric, self.signals)
         plt.show()
 
